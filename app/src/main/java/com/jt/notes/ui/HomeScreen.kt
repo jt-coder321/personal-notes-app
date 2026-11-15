@@ -123,7 +123,7 @@ fun HomeScreen(
             try {
                 vm.setAutoBackupFolder(uri)
                 toast("Automatic backup is on. A backup is written to that folder once a day.")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 toast("That folder can't be used: ${e.message}")
             }
         }

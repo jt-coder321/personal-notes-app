@@ -31,7 +31,7 @@ class AutoBackupWorker(context: Context, params: WorkerParameters) : CoroutineWo
             out.use { Backup.export(context, NotesDb.get(context).dao(), it, null) }
             prefs.edit().putLong("lastBackup", System.currentTimeMillis()).apply()
             Result.success()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Result.retry()
         }
     }

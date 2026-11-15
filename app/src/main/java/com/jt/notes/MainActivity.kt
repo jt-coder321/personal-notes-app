@@ -78,11 +78,33 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val crashFile = java.io.File(filesDir, "last-crash.txt")
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try { crashFile.writeText(android.util.Log.getStackTraceString(e).take(6000)) } catch (_: Throwable) {}
+            previous?.uncaughtException(t, e)
+        }
+        val lastCrash = if (crashFile.exists()) crashFile.readText().also { crashFile.delete() } else null
         Reminders.ensureChannel(this)
         locked = lockEnabled() && !unlocked
         if (savedInstanceState == null) handleIntent(intent)
         setContent {
             NotesTheme {
+                var crashText by rememberSaveable { mutableStateOf(lastCrash) }
+                crashText?.let { text ->
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { crashText = null },
+                        title = { Text("The app crashed last time") },
+                        text = { Text(text.take(1500), style = MaterialTheme.typography.bodySmall) },
+                        confirmButton = {
+                            androidx.compose.material3.TextButton(onClick = {
+                                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("crash", text))
+                                crashText = null
+                            }) { Text("Copy and close") }
+                        },
+                    )
+                }
                 if (locked) {
                     LockScreen(onUnlock = { promptUnlock() })
                 } else {
