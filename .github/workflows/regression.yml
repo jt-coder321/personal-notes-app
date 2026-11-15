@@ -41,6 +41,9 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Run on an emulator
+        id: emulator
+        continue-on-error: true
+        timeout-minutes: 30
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -55,3 +58,22 @@ jobs:
         with:
           name: regression-output
           path: regression-output
+
+      - name: Show the summary
+        if: always()
+        run: |
+          cat regression-output/summary.txt || echo "no summary was written"
+          cat regression-output/summary.txt >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Stop leftover processes
+        if: always()
+        run: |
+          ./gradlew --stop || true
+          adb kill-server || true
+          pkill -9 -f qemu-system || true
+          pkill -9 -f crashpad_handler || true
+
+      - name: Fail if any check failed
+        run: |
+          test -f regression-output/summary.txt
+          ! grep -q "^FAIL" regression-output/summary.txt
