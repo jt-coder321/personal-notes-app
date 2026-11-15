@@ -122,6 +122,7 @@ class MainActivity : FragmentActivity() {
     override fun onStop() {
         super.onStop()
         if (!isChangingConfigurations) stoppedAt = SystemClock.elapsedRealtime()
+        RecentNotesWidget.refresh(this)
     }
 
     override fun onStart() {

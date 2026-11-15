@@ -122,7 +122,7 @@ fun HomeScreen(
         if (uri != null) {
             try {
                 vm.setAutoBackupFolder(uri)
-                toast("Automatic backup is on. A backup is written to that folder once a day.")
+                vm.backupNow { toast("Automatic backup is on. $it") }
             } catch (e: Throwable) {
                 toast("That folder can't be used: ${e.message}")
             }
@@ -445,10 +445,16 @@ fun HomeScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showAutoBackupDialog = false
-                    folderLauncher.launch(null)
-                }) { Text("Change folder") }
+                Row {
+                    TextButton(onClick = {
+                        showAutoBackupDialog = false
+                        vm.backupNow { toast(it) }
+                    }) { Text("Back up now") }
+                    TextButton(onClick = {
+                        showAutoBackupDialog = false
+                        folderLauncher.launch(null)
+                    }) { Text("Change folder") }
+                }
             },
             dismissButton = {
                 TextButton(onClick = {
@@ -559,8 +565,11 @@ private fun UndoBar(message: String, onUndo: () -> Unit) {
 @Composable
 private fun BackupStatus(lastBackup: Long, onClick: () -> Unit) {
     val p = LocalPalette.current
+    val days = ((System.currentTimeMillis() - lastBackup) / 86_400_000L).toInt()
+    val stale = lastBackup != 0L && days >= 3
     val text = when {
         lastBackup == 0L -> "Not backed up yet"
+        stale -> "Last backup was $days days ago"
         DateUtils.isToday(lastBackup) -> "Backed up today"
         else -> "Backed up " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(lastBackup))
     }
@@ -576,10 +585,14 @@ private fun BackupStatus(lastBackup: Long, onClick: () -> Unit) {
         Icon(
             if (lastBackup == 0L) Icons.Outlined.CloudUpload else Icons.Outlined.CloudDone,
             contentDescription = null,
-            tint = p.muted,
+            tint = if (stale) androidx.compose.ui.graphics.Color(0xFFB4380F) else p.muted,
             modifier = Modifier.size(18.dp),
         )
-        Text(text, style = MaterialTheme.typography.labelLarge, color = p.muted)
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (stale) androidx.compose.ui.graphics.Color(0xFFB4380F) else p.muted,
+        )
     }
 }
 

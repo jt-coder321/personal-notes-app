@@ -474,6 +474,15 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Writes the automatic backup right now, so the folder is tested and the status updates. */
+    fun backupNow(onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val error = AutoBackup.runNow(context)
+            lastBackup.value = prefs.getLong("lastBackup", 0L)
+            onDone(if (error == null) "Backup saved to your folder" else "Backup failed: $error")
+        }
+    }
+
     /** Turns the daily automatic backup on (with a folder) or off (with null). */
     fun setAutoBackupFolder(uri: Uri?) {
         if (uri != null) {
