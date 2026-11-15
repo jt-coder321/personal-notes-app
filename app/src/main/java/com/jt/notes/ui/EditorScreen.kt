@@ -1,14 +1,29 @@
 package com.jt.notes.ui
 
+import android.Manifest
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.speech.RecognizerIntent
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -16,30 +31,47 @@ import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jt.notes.NotesViewModel
+import com.jt.notes.Undo
 import com.jt.notes.data.CheckItem
+import com.jt.notes.data.Images
 import com.jt.notes.data.Note
+import com.jt.notes.data.NoteExport
+import com.jt.notes.data.Version
 import com.jt.notes.data.checklistBodyToText
 import com.jt.notes.data.isBlank
 import com.jt.notes.data.itemsToBody
 import com.jt.notes.data.parseItems
 import com.jt.notes.data.textToChecklistBody
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.DateFormat
+import java.util.Calendar
 import java.util.Date
 
 /** Remembers whether the editor already saved on its way out. */
@@ -54,21 +86,46 @@ private class ExitState {
 @Composable
 fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: () -> Unit) {
     val p = LocalPalette.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     var loaded by remember(noteId) { mutableStateOf<Note?>(null) }
+    var original by remember(noteId) { mutableStateOf<Note?>(null) }
+    var bodyField by remember(noteId) { mutableStateOf(TextFieldValue("")) }
     LaunchedEffect(noteId) {
         val fromDb = vm.getNote(noteId)
-        if (fromDb == null) onClose() else loaded = fromDb
+        if (fromDb == null) {
+            onClose()
+        } else {
+            original = fromDb
+            bodyField = TextFieldValue(fromDb.body, TextRange(fromDb.body.length))
+            loaded = fromDb
+        }
     }
     val note = loaded ?: return
 
     val labels by vm.labels.collectAsStateWithLifecycle()
     val links by vm.noteLabels.collectAsStateWithLifecycle()
+    val allAttachments by vm.attachments.collectAsStateWithLifecycle()
     val myLabelIds = remember(links, noteId) { links.filter { it.noteId == noteId }.map { it.labelId }.toSet() }
     val myLabels = labels.filter { it.id in myLabelIds }
+    val pictures = allAttachments.filter { it.noteId == noteId }
+
     var showLabels by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var versions by remember { mutableStateOf<List<Version>?>(null) }
+    var pendingPhoto by rememberSaveable { mutableStateOf<String?>(null) }
+
+    fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 
     fun edit(changed: Note) {
         loaded = changed.copy(updatedAt = System.currentTimeMillis())
+    }
+
+    /** Replaces the whole body, keeping the text field in step. */
+    fun replaceContent(changed: Note) {
+        bodyField = TextFieldValue(changed.body, TextRange(changed.body.length))
+        edit(changed)
     }
 
     // Autosave shortly after each change, when the app goes to the background,
@@ -81,17 +138,133 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
 
     val exit = remember(noteId) { ExitState() }
     val latest by rememberUpdatedState(note)
+    val latestOriginal by rememberUpdatedState(original)
     DisposableEffect(noteId) {
-        onDispose { if (!exit.handled) vm.finishEditing(latest) }
+        onDispose { if (!exit.handled) vm.finishEditing(latest, latestOriginal) }
     }
 
     /** Leaves the editor, writing [finalNote] (or dropping it if it is empty). */
-    fun leave(finalNote: Note) {
+    fun leave(finalNote: Note, offerUndo: Undo? = null) {
         exit.handled = true
-        vm.finishEditing(finalNote)
+        vm.finishEditing(finalNote, original, offerUndo)
         onClose()
     }
     BackHandler { leave(note) }
+
+    // ----- things that open other screens -----
+
+    val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.addImage(noteId, uri)
+    }
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        val name = pendingPhoto
+        if (saved && name != null) vm.addImageFile(noteId, name)
+        pendingPhoto = null
+    }
+    val savePdf = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri -> if (uri != null) vm.exportPdf(latest, uri) { toast(it) } }
+    val askNotifications = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) toast("Notifications are off for Notes, so the reminder cannot pop up")
+    }
+    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (!spoken.isNullOrBlank()) {
+            val current = latest
+            if (current.isChecklist) {
+                val items = parseItems(current.body).filter { it.text.isNotBlank() } + CheckItem(spoken, false)
+                edit(current.copy(body = itemsToBody(items)))
+            } else {
+                val joined = if (current.body.isBlank()) spoken else current.body.trimEnd() + "\n" + spoken
+                replaceContent(current.copy(body = joined))
+            }
+        }
+    }
+
+    fun startCamera() {
+        val name = Images.newName()
+        pendingPhoto = name
+        try {
+            val uri = FileProvider.getUriForFile(context, "com.jt.notes.files", Images.file(context, name))
+            takePicture.launch(uri)
+        } catch (e: Exception) {
+            toast("The camera could not be opened")
+        }
+    }
+
+    fun startSpeech() {
+        try {
+            speech.launch(
+                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            )
+        } catch (e: ActivityNotFoundException) {
+            toast("No voice typing app was found on this phone")
+        }
+    }
+
+    fun pickReminder() {
+        val start = Calendar.getInstance().apply { add(Calendar.HOUR_OF_DAY, 1) }
+        DatePickerDialog(
+            context,
+            { _, year, month, day ->
+                TimePickerDialog(
+                    context,
+                    { _, hour, minute ->
+                        val at = Calendar.getInstance().apply {
+                            set(year, month, day, hour, minute, 0)
+                            set(Calendar.MILLISECOND, 0)
+                        }.timeInMillis
+                        if (at <= System.currentTimeMillis()) {
+                            toast("Pick a time in the future")
+                        } else {
+                            edit(latest.copy(reminderAt = at))
+                            vm.setReminder(noteId, at)
+                            if (Build.VERSION.SDK_INT >= 33) {
+                                askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        }
+                    },
+                    start.get(Calendar.HOUR_OF_DAY),
+                    0,
+                    android.text.format.DateFormat.is24HourFormat(context),
+                ).show()
+            },
+            start.get(Calendar.YEAR),
+            start.get(Calendar.MONTH),
+            start.get(Calendar.DAY_OF_MONTH),
+        ).show()
+    }
+
+    fun shareAsText() {
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(Intent.EXTRA_SUBJECT, note.title)
+            .putExtra(Intent.EXTRA_TEXT, NoteExport.toMarkdown(note))
+        try {
+            context.startActivity(Intent.createChooser(send, "Share note"))
+        } catch (e: Exception) {
+            toast("Nothing on this phone can receive the text")
+        }
+    }
+
+    fun openLink(link: DetectedLink) {
+        val intent = when (link.kind) {
+            LinkKind.WEB -> Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse(if (link.text.contains("://")) link.text else "https://" + link.text),
+            )
+            LinkKind.EMAIL -> Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:" + link.text))
+            LinkKind.PHONE -> Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + link.text.filter { it.isDigit() || it == '+' }))
+        }
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            toast("No app can open that")
+        }
+    }
 
     val background = noteBackground(note.color) ?: p.surface
     val insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical)
@@ -119,7 +292,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 }
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = {
-                    edit(
+                    replaceContent(
                         if (note.isChecklist) {
                             note.copy(isChecklist = false, body = checklistBodyToText(note.body))
                         } else {
@@ -141,15 +314,50 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 }
                 IconButton(onClick = {
                     leave(
-                        note.copy(
-                            archived = !note.archived,
-                            pinned = false,
-                            updatedAt = System.currentTimeMillis(),
-                        )
+                        note.copy(archived = !note.archived, pinned = false, updatedAt = System.currentTimeMillis()),
+                        Undo(if (note.archived) "Note unarchived" else "Note archived", listOf(note)),
                     )
                 }) {
                     if (note.archived) Icon(Icons.Outlined.Unarchive, contentDescription = "Unarchive")
                     else Icon(Icons.Outlined.Archive, contentDescription = "Archive")
+                }
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Outlined.MoreVert, contentDescription = "More")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        EditorMenuRow(
+                            if (note.reminderAt == null) "Remind me" else "Change reminder",
+                            Icons.Outlined.Alarm,
+                        ) { menuOpen = false; pickReminder() }
+                        EditorMenuRow("Add picture", Icons.Outlined.Image) {
+                            menuOpen = false
+                            pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
+                        EditorMenuRow("Take photo", Icons.Outlined.PhotoCamera) { menuOpen = false; startCamera() }
+                        EditorMenuRow("Dictate", Icons.Outlined.Mic) { menuOpen = false; startSpeech() }
+                        HorizontalDivider()
+                        EditorMenuRow("Make a copy", Icons.Outlined.ContentCopy) {
+                            menuOpen = false
+                            vm.duplicate(listOf(note)) { toast("Copy made") }
+                        }
+                        if (note.isChecklist) {
+                            EditorMenuRow("Copy with boxes cleared", Icons.Outlined.LibraryAddCheck) {
+                                menuOpen = false
+                                vm.duplicate(listOf(note), clearBoxes = true) { toast("Fresh copy made") }
+                            }
+                        }
+                        EditorMenuRow("Version history", Icons.Outlined.History) {
+                            menuOpen = false
+                            scope.launch { versions = vm.versions(noteId) }
+                        }
+                        HorizontalDivider()
+                        EditorMenuRow("Share as text", Icons.Outlined.Share) { menuOpen = false; shareAsText() }
+                        EditorMenuRow("Save as PDF", Icons.Outlined.PictureAsPdf) {
+                            menuOpen = false
+                            savePdf.launch((note.title.ifBlank { "note" }).take(40) + ".pdf")
+                        }
+                    }
                 }
             }
 
@@ -175,6 +383,73 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
+
+                val reminder = note.reminderAt
+                if (reminder != null) {
+                    Surface(
+                        shape = CircleShape,
+                        color = p.ink.copy(alpha = 0.08f),
+                        contentColor = p.ink,
+                    ) {
+                        Row(
+                            Modifier.padding(start = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Outlined.Alarm, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text(
+                                formatReminder(reminder),
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.clickable { pickReminder() },
+                            )
+                            IconButton(onClick = {
+                                edit(note.copy(reminderAt = null))
+                                vm.setReminder(noteId, null)
+                            }) {
+                                Icon(
+                                    Icons.Outlined.Close,
+                                    contentDescription = "Remove reminder",
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (pictures.isNotEmpty()) {
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        pictures.forEach { picture ->
+                            key(picture.id) {
+                                Box {
+                                    NoteImage(
+                                        name = picture.fileName,
+                                        maxPx = 1080,
+                                        modifier = Modifier.size(200.dp).clip(RoundedCornerShape(20.dp)),
+                                    )
+                                    Surface(
+                                        onClick = { vm.removeImage(picture) },
+                                        shape = CircleShape,
+                                        color = Color(0xCC0E1116),
+                                        contentColor = Color.White,
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(36.dp),
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                Icons.Outlined.Close,
+                                                contentDescription = "Remove picture",
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (note.isChecklist) {
                     val named = parseItems(note.body).filter { it.text.isNotBlank() }
                     if (named.isNotEmpty()) {
@@ -194,14 +469,70 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     }
                     ChecklistEditor(body = note.body, onBodyChange = { edit(note.copy(body = it)) })
                 } else {
-                    PlainTextField(
-                        value = note.body,
-                        onValueChange = { edit(note.copy(body = it)) },
-                        placeholder = "Start writing",
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 28.sp),
+                    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 28.sp)
+                    val dim = p.ink.copy(alpha = 0.35f)
+                    val transformation = remember(dim) { MarkupTransformation(dim) }
+                    BasicTextField(
+                        value = bodyField,
+                        onValueChange = { value ->
+                            bodyField = value
+                            if (value.text != note.body) edit(note.copy(body = value.text))
+                        },
                         modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 240.dp),
+                        textStyle = bodyStyle.copy(color = p.ink),
+                        cursorBrush = SolidColor(p.accent),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        visualTransformation = transformation,
+                        decorationBox = { inner ->
+                            Box {
+                                if (bodyField.text.isEmpty()) {
+                                    Text("Start writing", style = bodyStyle, color = p.ink.copy(alpha = 0.45f))
+                                }
+                                inner()
+                            }
+                        },
                     )
                 }
+
+                val found = remember(note.title, note.body) { detectLinks(note.title + "\n" + note.body) }
+                if (found.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        found.forEach { link ->
+                            Surface(
+                                onClick = { openLink(link) },
+                                shape = CircleShape,
+                                color = p.ink.copy(alpha = 0.08f),
+                                contentColor = p.ink,
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp).widthIn(max = 260.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        when (link.kind) {
+                                            LinkKind.WEB -> Icons.Outlined.Link
+                                            LinkKind.EMAIL -> Icons.Outlined.Email
+                                            LinkKind.PHONE -> Icons.Outlined.Phone
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Text(
+                                        link.text,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (myLabels.isNotEmpty()) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -213,14 +544,35 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 }
             }
 
-            // Bottom: when it was last edited, then the tool bar
-            Text(
-                "Edited " + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
-                    .format(Date(note.updatedAt)),
-                style = MaterialTheme.typography.labelSmall,
-                color = p.ink.copy(alpha = 0.7f),
-                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp),
-            )
+            // Bottom: formatting for text notes and when it was last edited, then the tool bar
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 20.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!note.isChecklist) {
+                    fun format(change: (TextFieldValue) -> TextFieldValue) {
+                        val changed = change(bodyField)
+                        bodyField = changed
+                        edit(note.copy(body = changed.text))
+                    }
+                    IconButton(onClick = { format { toggleLinePrefix(it, "# ") } }) {
+                        Icon(Icons.Outlined.Title, contentDescription = "Heading")
+                    }
+                    IconButton(onClick = { format { toggleBold(it) } }) {
+                        Icon(Icons.Outlined.FormatBold, contentDescription = "Bold")
+                    }
+                    IconButton(onClick = { format { toggleLinePrefix(it, "- ") } }) {
+                        Icon(Icons.Outlined.FormatListBulleted, contentDescription = "Bullet")
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "Edited " + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+                        .format(Date(note.updatedAt)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = p.ink.copy(alpha = 0.7f),
+                )
+            }
             Surface(
                 shape = CircleShape,
                 color = p.bar,
@@ -251,15 +603,17 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         Icon(Icons.AutoMirrored.Outlined.Label, contentDescription = "Labels")
                     }
                     IconButton(onClick = {
-                        if (note.isBlank()) {
+                        if (note.isBlank() && pictures.isEmpty()) {
                             leave(note)
                         } else {
+                            vm.setReminder(noteId, null)
                             leave(
                                 note.copy(
                                     trashedAt = System.currentTimeMillis(),
                                     pinned = false,
                                     updatedAt = System.currentTimeMillis(),
-                                )
+                                ),
+                                Undo("Moved to Trash", listOf(note)),
                             )
                         }
                     }) {
@@ -291,6 +645,27 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
             onDismiss = { showLabels = false },
         )
     }
+    val history = versions
+    if (history != null) {
+        VersionHistoryDialog(
+            versions = history,
+            onRestore = { version ->
+                versions = null
+                replaceContent(note.copy(title = version.title, body = version.body, isChecklist = version.isChecklist))
+                toast("Earlier version restored")
+            },
+            onDismiss = { versions = null },
+        )
+    }
+}
+
+@Composable
+private fun EditorMenuRow(text: String, icon: ImageVector, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(text) },
+        leadingIcon = { Icon(icon, contentDescription = null) },
+        onClick = onClick,
+    )
 }
 
 /** One color choice in the tool bar. Index 0 is "no color". */
@@ -330,7 +705,7 @@ private fun RoundCheck(checked: Boolean, onToggle: () -> Unit) {
     val p = LocalPalette.current
     Box(
         Modifier
-            .size(48.dp)
+            .size(44.dp)
             .clip(CircleShape)
             .clickable(onClickLabel = if (checked) "Mark as not done" else "Mark as done", onClick = onToggle),
         contentAlignment = Alignment.Center,
@@ -350,17 +725,73 @@ private fun RoundCheck(checked: Boolean, onToggle: () -> Unit) {
     }
 }
 
+/** Tracks one drag of a checklist handle. */
+private class DragTracker {
+    var index = -1
+    var x = 0f
+    var y = 0f
+}
+
 @Composable
 private fun ChecklistEditor(body: String, onBodyChange: (String) -> Unit) {
     val items = remember(body) { parseItems(body) }
     var focusIndex by remember { mutableIntStateOf(-1) }
     val ink = LocalContentColor.current
+    val density = LocalDensity.current
+    val rowStep = with(density) { 48.dp.toPx() }
+    val indentStep = with(density) { 36.dp.toPx() }
+    val drag = remember { DragTracker() }
 
     fun update(list: List<CheckItem>) = onBodyChange(itemsToBody(list))
+
+    // Dragging a handle up or down moves the item past its neighbours;
+    // dragging it right or left makes it a sub-item or a normal item.
+    val onDragBy by rememberUpdatedState<(Float, Float) -> Unit> { dx, dy ->
+        val from = drag.index
+        if (from in items.indices) {
+            drag.x += dx
+            drag.y += dy
+            val list = items.toMutableList()
+            var changed = false
+            if (drag.y > rowStep) {
+                val to = (from + 1..items.lastIndex).firstOrNull { !items[it].checked }
+                if (to != null) {
+                    list[from] = items[to]
+                    list[to] = items[from]
+                    drag.index = to
+                    changed = true
+                }
+                drag.y = 0f
+            } else if (drag.y < -rowStep) {
+                val to = (from - 1 downTo 0).firstOrNull { !items[it].checked }
+                if (to != null) {
+                    list[from] = items[to]
+                    list[to] = items[from]
+                    drag.index = to
+                    changed = true
+                }
+                drag.y = 0f
+            } else if (drag.x > indentStep) {
+                if (from > 0 && items[from].indent == 0) {
+                    list[from] = items[from].copy(indent = 1)
+                    changed = true
+                }
+                drag.x = 0f
+            } else if (drag.x < -indentStep) {
+                if (items[from].indent > 0) {
+                    list[from] = items[from].copy(indent = 0)
+                    changed = true
+                }
+                drag.x = 0f
+            }
+            if (changed) update(list)
+        }
+    }
 
     @Composable
     fun ItemRow(index: Int, item: CheckItem) {
         val focusRequester = remember { FocusRequester() }
+        val currentIndex by rememberUpdatedState(index)
         val wantsFocus = focusIndex == index
         LaunchedEffect(wantsFocus) {
             if (wantsFocus) {
@@ -368,7 +799,40 @@ private fun ChecklistEditor(body: String, onBodyChange: (String) -> Unit) {
                 focusIndex = -1
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.padding(start = if (item.indent > 0) 28.dp else 0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (!item.checked) {
+                Box(
+                    Modifier
+                        .size(width = 28.dp, height = 44.dp)
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragStart = {
+                                    drag.index = currentIndex
+                                    drag.x = 0f
+                                    drag.y = 0f
+                                },
+                                onDragEnd = { drag.index = -1 },
+                                onDragCancel = { drag.index = -1 },
+                            ) { change, amount ->
+                                change.consume()
+                                onDragBy(amount.x, amount.y)
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.DragIndicator,
+                        contentDescription = "Drag to move. Drag right to make a sub-item.",
+                        tint = ink.copy(alpha = 0.45f),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            } else {
+                Spacer(Modifier.width(28.dp))
+            }
             RoundCheck(
                 checked = item.checked,
                 onToggle = {
@@ -384,7 +848,7 @@ private fun ChecklistEditor(body: String, onBodyChange: (String) -> Unit) {
                     val list = items.toMutableList()
                     list[index] = item.copy(text = parts[0])
                     parts.drop(1).forEachIndexed { offset, part ->
-                        list.add(index + 1 + offset, CheckItem(part, false))
+                        list.add(index + 1 + offset, CheckItem(part, false, item.indent))
                     }
                     update(list)
                     if (parts.size > 1) focusIndex = index + parts.size - 1
@@ -408,8 +872,7 @@ private fun ChecklistEditor(body: String, onBodyChange: (String) -> Unit) {
         }
     }
 
-    // Pulled left so the checkboxes line up with the title above.
-    Column(Modifier.offset(x = (-11).dp)) {
+    Column(Modifier.offset(x = (-8).dp)) {
         items.forEachIndexed { index, item ->
             if (!item.checked) key(index) { ItemRow(index, item) }
         }
@@ -424,7 +887,8 @@ private fun ChecklistEditor(body: String, onBodyChange: (String) -> Unit) {
                 .heightIn(min = 48.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            Spacer(Modifier.width(28.dp))
+            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
                 Icon(Icons.Outlined.Add, contentDescription = null, tint = ink.copy(alpha = 0.7f))
             }
             Spacer(Modifier.width(4.dp))
@@ -434,7 +898,7 @@ private fun ChecklistEditor(body: String, onBodyChange: (String) -> Unit) {
         if (checkedCount > 0) {
             HorizontalDivider(
                 color = ink.copy(alpha = 0.16f),
-                modifier = Modifier.padding(start = 11.dp, top = 8.dp),
+                modifier = Modifier.padding(start = 8.dp, top = 8.dp),
             )
             Text(
                 "DONE",
@@ -442,7 +906,7 @@ private fun ChecklistEditor(body: String, onBodyChange: (String) -> Unit) {
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 1.sp,
                 color = ink.copy(alpha = 0.7f),
-                modifier = Modifier.padding(start = 11.dp, top = 14.dp, bottom = 4.dp),
+                modifier = Modifier.padding(start = 8.dp, top = 14.dp, bottom = 4.dp),
             )
             items.forEachIndexed { index, item ->
                 if (item.checked) key(index) { ItemRow(index, item) }
