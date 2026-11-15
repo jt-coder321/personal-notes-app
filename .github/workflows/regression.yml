@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 jobs:
@@ -64,6 +64,21 @@ jobs:
         with:
           name: regression-output
           path: regression-output
+
+      - name: Publish results to the regression-results branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd regression-output || exit 0
+          rm -rf test-results
+          for f in logcat-*.txt; do tail -c 400000 "$f" > "$f.tail" && mv "$f.tail" "$f"; done
+          git init -q -b regression-results
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -q -m "Regression results for $GITHUB_SHA"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" regression-results
 
       - name: Show the summary
         if: always()

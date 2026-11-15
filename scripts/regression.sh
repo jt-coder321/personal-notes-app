@@ -16,9 +16,13 @@ RESULT=0
 say() { echo; echo "===== $* ====="; }
 record() { echo "$1" | tee -a "$OUT/summary.txt"; }
 shot() { adb exec-out screencap -p > "$OUT/$1.png"; }
+DUMP=0
 screen_has() {
-  adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1
-  adb shell cat /sdcard/ui.xml 2> /dev/null | grep -q "$1"
+  DUMP=$((DUMP + 1))
+  adb shell rm -f /sdcard/ui.xml
+  adb shell uiautomator dump /sdcard/ui.xml 2>&1 | tail -1
+  adb shell cat /sdcard/ui.xml > "$OUT/ui-$DUMP.xml" 2> /dev/null
+  grep -q "$1" "$OUT/ui-$DUMP.xml"
 }
 check_text() { # name, text
   if screen_has "$2"; then record "PASS  $1"; else record "FAIL  $1 (did not find: $2)"; RESULT=1; fi
