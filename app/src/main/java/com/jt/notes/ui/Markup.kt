@@ -6,7 +6,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
@@ -22,6 +24,11 @@ import androidx.compose.ui.unit.sp
  */
 
 private val BOLD = Regex("\\*\\*(.+?)\\*\\*")
+private val STRIKE = Regex("~~(.+?)~~")
+private val ITALIC = Regex("(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)")
+private val INLINE = Regex("\\*\\*(.+?)\\*\\*|~~(.+?)~~|(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)")
+private val LINE_PREFIX = Regex("^(## |# |- |> |\\d+\\. )")
+private val NUMBERED = Regex("^(\\d+)\\. ")
 
 /** Styles the text in place for the editor: every character stays, the marks are dimmed. */
 fun styleMarkup(text: String, dim: Color): AnnotatedString = buildAnnotatedString {
@@ -40,6 +47,11 @@ fun styleMarkup(text: String, dim: Color): AnnotatedString = buildAnnotatedStrin
                 addStyle(dimStyle, start, start + 1)
             }
             line.startsWith("- ") -> addStyle(dimStyle, start, start + 1)
+            line.startsWith("> ") -> {
+                addStyle(SpanStyle(fontStyle = FontStyle.Italic), start, end)
+                addStyle(dimStyle, start, start + 1)
+            }
+            else -> NUMBERED.find(line)?.let { addStyle(dimStyle, start, start + it.value.length - 1) }
         }
         start = end + 1
     }
@@ -48,6 +60,18 @@ fun styleMarkup(text: String, dim: Color): AnnotatedString = buildAnnotatedStrin
         addStyle(SpanStyle(fontWeight = FontWeight.SemiBold), range.first, range.last + 1)
         addStyle(dimStyle, range.first, range.first + 2)
         addStyle(dimStyle, range.last - 1, range.last + 1)
+    }
+    for (match in STRIKE.findAll(text)) {
+        val range = match.range
+        addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough), range.first, range.last + 1)
+        addStyle(dimStyle, range.first, range.first + 2)
+        addStyle(dimStyle, range.last - 1, range.last + 1)
+    }
+    for (match in ITALIC.findAll(text)) {
+        val range = match.range
+        addStyle(SpanStyle(fontStyle = FontStyle.Italic), range.first, range.last + 1)
+        addStyle(dimStyle, range.first, range.first + 1)
+        addStyle(dimStyle, range.last, range.last + 1)
     }
 }
 
@@ -66,15 +90,20 @@ fun displayMarkup(text: String): AnnotatedString = buildAnnotatedString {
             raw.startsWith("## ") -> { heading = true; raw.substring(3) }
             raw.startsWith("# ") -> { heading = true; raw.substring(2) }
             raw.startsWith("- ") -> "• " + raw.substring(2)
+            raw.startsWith("> ") -> "▎ " + raw.substring(2)
             else -> raw
         }
         val lineStart = length
         var cursor = 0
-        for (match in BOLD.findAll(line)) {
+        for (match in INLINE.findAll(line)) {
             append(line.substring(cursor, match.range.first))
-            val boldStart = length
-            append(match.groupValues[1])
-            addStyle(bold, boldStart, length)
+            val from = length
+            val style = when {
+                match.groups[1] != null -> { append(match.groupValues[1]); bold }
+                match.groups[2] != null -> { append(match.groupValues[2]); SpanStyle(textDecoration = TextDecoration.LineThrough) }
+                else -> { append(match.groupValues[3]); SpanStyle(fontStyle = FontStyle.Italic) }
+            }
+            addStyle(style, from, length)
             cursor = match.range.last + 1
         }
         append(line.substring(cursor))
@@ -96,13 +125,14 @@ fun toggleLinePrefix(value: TextFieldValue, prefix: String): TextFieldValue {
     val start = lineStartOf(text, cursor)
     val rest = text.substring(start)
     return when {
-        rest.startsWith(prefix) -> {
+        rest.startsWith(prefix) || (prefix == "1. " && NUMBERED.containsMatchIn(rest)) -> {
+            val prefix = if (prefix == "1. ") NUMBERED.find(rest)?.value ?: prefix else prefix
             val newText = text.removeRange(start, start + prefix.length)
             TextFieldValue(newText, TextRange((cursor - prefix.length).coerceAtLeast(start)))
         }
         else -> {
             // Replace another prefix (for example a bullet becoming a heading).
-            val other = listOf("## ", "# ", "- ").firstOrNull { rest.startsWith(it) }
+            val other = LINE_PREFIX.find(rest)?.value
             val cleaned = if (other != null) text.removeRange(start, start + other.length) else text
             val shift = prefix.length - (other?.length ?: 0)
             val newText = cleaned.substring(0, start) + prefix + cleaned.substring(start)
@@ -111,23 +141,50 @@ fun toggleLinePrefix(value: TextFieldValue, prefix: String): TextFieldValue {
     }
 }
 
-/** Wraps the selection in ** **, or places the cursor between a new pair. */
-fun toggleBold(value: TextFieldValue): TextFieldValue {
+/** Wraps the selection in a mark such as ** or ~~, or places the cursor between a new pair. */
+fun toggleWrap(value: TextFieldValue, mark: String): TextFieldValue {
     val text = value.text
+    val n = mark.length
     val a = value.selection.min.coerceIn(0, text.length)
     val b = value.selection.max.coerceIn(0, text.length)
     if (a == b) {
-        val newText = text.substring(0, a) + "****" + text.substring(a)
-        return TextFieldValue(newText, TextRange(a + 2))
+        val newText = text.substring(0, a) + mark + mark + text.substring(a)
+        return TextFieldValue(newText, TextRange(a + n))
     }
     val selected = text.substring(a, b)
-    return if (selected.startsWith("**") && selected.endsWith("**") && selected.length >= 4) {
-        val inner = selected.substring(2, selected.length - 2)
+    return if (selected.length >= 2 * n + 1 && selected.startsWith(mark) && selected.endsWith(mark)) {
+        val inner = selected.substring(n, selected.length - n)
         TextFieldValue(text.substring(0, a) + inner + text.substring(b), TextRange(a, a + inner.length))
     } else {
-        val newText = text.substring(0, a) + "**" + selected + "**" + text.substring(b)
-        TextFieldValue(newText, TextRange(a, b + 4))
+        val newText = text.substring(0, a) + mark + selected + mark + text.substring(b)
+        TextFieldValue(newText, TextRange(a, b + 2 * n))
     }
+}
+
+fun toggleBold(value: TextFieldValue) = toggleWrap(value, "**")
+fun toggleItalic(value: TextFieldValue) = toggleWrap(value, "*")
+fun toggleStrike(value: TextFieldValue) = toggleWrap(value, "~~")
+
+/**
+ * Called after every edit. When the user just pressed Enter at the end of a bullet, number or quote
+ * line, starts the next line with the same marker; pressing Enter on an empty marker line ends the list.
+ */
+fun continueList(old: TextFieldValue, new: TextFieldValue): TextFieldValue {
+    val cursor = new.selection.start
+    if (!new.selection.collapsed || new.text.length != old.text.length + 1) return new
+    if (cursor < 1 || new.text[cursor - 1] != '\n') return new
+    if (old.text != new.text.removeRange(cursor - 1, cursor)) return new
+    val lineStart = new.text.lastIndexOf('\n', cursor - 2) + 1
+    val line = new.text.substring(lineStart, cursor - 1)
+    val marker = Regex("^(- |> |(\\d+)\\. )").find(line)?.value ?: return new
+    if (line.length == marker.length) {
+        // Empty item: remove the marker and leave the list.
+        val text = new.text.removeRange(lineStart, cursor - 1)
+        return TextFieldValue(text, TextRange(lineStart + 1))
+    }
+    val next = NUMBERED.find(marker)?.let { "${it.groupValues[1].toInt() + 1}. " } ?: marker
+    val text = new.text.substring(0, cursor) + next + new.text.substring(cursor)
+    return TextFieldValue(text, TextRange(cursor + next.length))
 }
 
 // ----- links -----

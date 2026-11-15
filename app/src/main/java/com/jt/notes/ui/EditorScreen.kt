@@ -489,8 +489,9 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     BasicTextField(
                         value = bodyField,
                         onValueChange = { value ->
-                            bodyField = value
-                            if (value.text != note.body) edit(note.copy(body = value.text))
+                            val next = continueList(bodyField, value)
+                            bodyField = next
+                            if (next.text != note.body) edit(note.copy(body = next.text))
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -572,17 +573,35 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         bodyField = changed
                         edit(note.copy(body = changed.text))
                     }
-                    IconButton(onClick = { format { toggleLinePrefix(it, "# ") } }) {
-                        Icon(Icons.Outlined.Title, contentDescription = "Heading")
+                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                        IconButton(onClick = { format { toggleLinePrefix(it, "# ") } }) {
+                            Icon(Icons.Outlined.Title, contentDescription = "Heading")
+                        }
+                        IconButton(onClick = { format { toggleLinePrefix(it, "## ") } }) {
+                            Text("H2", style = MaterialTheme.typography.labelLarge)
+                        }
+                        IconButton(onClick = { format { toggleBold(it) } }) {
+                            Icon(Icons.Outlined.FormatBold, contentDescription = "Bold")
+                        }
+                        IconButton(onClick = { format { toggleItalic(it) } }) {
+                            Icon(Icons.Outlined.FormatItalic, contentDescription = "Italic")
+                        }
+                        IconButton(onClick = { format { toggleStrike(it) } }) {
+                            Icon(Icons.Outlined.FormatStrikethrough, contentDescription = "Strikethrough")
+                        }
+                        IconButton(onClick = { format { toggleLinePrefix(it, "- ") } }) {
+                            Icon(Icons.Outlined.FormatListBulleted, contentDescription = "Bullet list")
+                        }
+                        IconButton(onClick = { format { toggleLinePrefix(it, "1. ") } }) {
+                            Icon(Icons.Outlined.FormatListNumbered, contentDescription = "Numbered list")
+                        }
+                        IconButton(onClick = { format { toggleLinePrefix(it, "> ") } }) {
+                            Icon(Icons.Outlined.FormatQuote, contentDescription = "Quote")
+                        }
                     }
-                    IconButton(onClick = { format { toggleBold(it) } }) {
-                        Icon(Icons.Outlined.FormatBold, contentDescription = "Bold")
-                    }
-                    IconButton(onClick = { format { toggleLinePrefix(it, "- ") } }) {
-                        Icon(Icons.Outlined.FormatListBulleted, contentDescription = "Bullet")
-                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
                 }
-                Spacer(Modifier.weight(1f))
                 Text(
                     "Edited " + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
                         .format(Date(note.updatedAt)),
