@@ -675,7 +675,14 @@ private fun CaptureBar(onNote: () -> Unit, onChecklist: () -> Unit, onSpeak: () 
                 Modifier.weight(1f).fillMaxHeight().clickable(onClick = onNote),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text("Take a note…", style = MaterialTheme.typography.bodyLarge, color = p.onBarMuted, maxLines = 1)
+                Text(
+                    "Take a note…",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = p.onBarMuted,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             IconButton(onClick = onSpeak) {
                 Icon(Icons.Outlined.Mic, contentDescription = "Speak a note")

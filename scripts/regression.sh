@@ -15,14 +15,30 @@ RESULT=0
 
 say() { echo; echo "===== $* ====="; }
 record() { echo "$1" | tee -a "$OUT/summary.txt"; }
-shot() { adb exec-out screencap -p > "$OUT/$1.png"; }
+# The slow test emulator sometimes shows its own "System UI isn't responding" box
+# over the app. That box belongs to the emulator, so it is closed before looking.
+dismiss() {
+  adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS > /dev/null 2>&1
+  sleep 1
+}
+shot() { dismiss; adb exec-out screencap -p > "$OUT/$1.png"; }
 DUMP=0
 screen_has() {
   DUMP=$((DUMP + 1))
-  adb shell rm -f /sdcard/ui.xml
-  adb shell uiautomator dump /sdcard/ui.xml 2>&1 | tail -1
-  adb shell cat /sdcard/ui.xml > "$OUT/ui-$DUMP.xml" 2> /dev/null
-  grep -q "$1" "$OUT/ui-$DUMP.xml"
+  for attempt in 1 2 3; do
+    dismiss
+    adb shell rm -f /sdcard/ui.xml
+    adb shell uiautomator dump /sdcard/ui.xml 2>&1 | tail -1
+    adb shell cat /sdcard/ui.xml > "$OUT/ui-$DUMP.xml" 2> /dev/null
+    if grep -q "isn't responding" "$OUT/ui-$DUMP.xml"; then
+      adb shell input keyevent KEYCODE_ESCAPE
+      sleep 3
+      continue
+    fi
+    grep -q "$1" "$OUT/ui-$DUMP.xml" && return 0
+    sleep 2
+  done
+  return 1
 }
 check_text() { # name, text
   if screen_has "$2"; then record "PASS  $1"; else record "FAIL  $1 (did not find: $2)"; RESULT=1; fi
@@ -46,6 +62,9 @@ go_home() {
   sleep 3
 }
 
+# Give the freshly booted emulator time to settle.
+sleep 45
+dismiss
 adb logcat -c
 adb shell settings put secure show_ime_with_hard_keyboard 0 > /dev/null 2>&1 || true
 
