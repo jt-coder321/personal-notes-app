@@ -300,7 +300,22 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     if (embedded) Icon(Icons.Outlined.Close, contentDescription = "Close note")
                     else Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                 }
-                Spacer(Modifier.weight(1f))
+                Column(Modifier.weight(1f).padding(horizontal = 6.dp)) {
+                    val edited = Date(note.updatedAt)
+                    Text(
+                        "Edited " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(edited),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = p.ink.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        DateFormat.getTimeInstance(DateFormat.SHORT).format(edited),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = p.ink.copy(alpha = 0.7f),
+                        maxLines = 1,
+                    )
+                }
                 IconButton(onClick = {
                     replaceContent(
                         if (note.isChecklist) {
@@ -602,12 +617,6 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
-                Text(
-                    "Edited " + DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
-                        .format(Date(note.updatedAt)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = p.ink.copy(alpha = 0.7f),
-                )
             }
             Surface(
                 shape = CircleShape,
