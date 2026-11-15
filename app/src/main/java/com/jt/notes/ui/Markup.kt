@@ -6,6 +6,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -75,9 +76,102 @@ fun styleMarkup(text: String, dim: Color): AnnotatedString = buildAnnotatedStrin
     }
 }
 
+/** Marks which characters are formatting symbols that the editor hides (the text itself is unchanged). */
+fun markupHidden(text: String): BooleanArray {
+    val hidden = BooleanArray(text.length)
+    var start = 0
+    for (line in text.split("\n")) {
+        val prefix = when {
+            line.startsWith("## ") -> 3
+            line.startsWith("# ") -> 2
+            else -> 0
+        }
+        for (i in 0 until prefix) hidden[start + i] = true
+        start += line.length + 1
+    }
+    fun hideEnds(range: IntRange, n: Int) {
+        for (i in 0 until n) { hidden[range.first + i] = true; hidden[range.last - i] = true }
+    }
+    BOLD.findAll(text).forEach { hideEnds(it.range, 2) }
+    STRIKE.findAll(text).forEach { hideEnds(it.range, 2) }
+    ITALIC.findAll(text).forEach { hideEnds(it.range, 1) }
+    return hidden
+}
+
+/** Characters shown in place of a list or quote marker. */
+private fun markupSubstitutions(text: String): Map<Int, String> {
+    val result = HashMap<Int, String>()
+    var start = 0
+    for (line in text.split("\n")) {
+        if (line.startsWith("- ")) result[start] = "\u2022"
+        else if (line.startsWith("> ")) result[start] = "\u258E"
+        start += line.length + 1
+    }
+    return result
+}
+
+/** Shows formatted text without the symbols: bold looks bold, with no ** around it. */
 class MarkupTransformation(private val dim: Color) : VisualTransformation {
-    override fun filter(text: AnnotatedString): TransformedText =
-        TransformedText(styleMarkup(text.text, dim), OffsetMapping.Identity)
+    override fun filter(text: AnnotatedString): TransformedText {
+        val t = text.text
+        val styled = styleMarkup(t, dim)
+        val hidden = markupHidden(t)
+        val subst = markupSubstitutions(t)
+        val visibleIndex = ArrayList<Int>()
+        val originalToTransformed = IntArray(t.length + 1)
+        val out = buildAnnotatedString {
+            var runStart = -1
+            fun flush(end: Int) {
+                if (runStart >= 0) { append(styled.subSequence(runStart, end)); runStart = -1 }
+            }
+            for (i in t.indices) {
+                originalToTransformed[i] = visibleIndex.size
+                if (hidden[i]) { flush(i); continue }
+                visibleIndex.add(i)
+                val replacement = subst[i]
+                if (replacement != null) {
+                    flush(i)
+                    withStyle(SpanStyle(color = dim)) { append(replacement) }
+                } else if (runStart < 0) {
+                    runStart = i
+                }
+            }
+            flush(t.length)
+        }
+        originalToTransformed[t.length] = visibleIndex.size
+        visibleIndex.add(t.length)
+        val mapping = object : OffsetMapping {
+            override fun originalToTransformed(offset: Int) = originalToTransformed[offset.coerceIn(0, t.length)]
+            override fun transformedToOriginal(offset: Int) = visibleIndex[offset.coerceIn(0, visibleIndex.size - 1)]
+        }
+        return TransformedText(out, mapping)
+    }
+}
+
+/**
+ * Backspace next to a hidden symbol: remove the whole heading marker, or the visible letter before the
+ * hidden symbols, so the user never has to delete characters they cannot see.
+ */
+fun fixHiddenDelete(old: TextFieldValue, new: TextFieldValue): TextFieldValue {
+    if (new.text.length != old.text.length - 1 || !new.selection.collapsed) return new
+    val k = new.selection.start
+    if (k < 0 || k >= old.text.length || old.text.removeRange(k, k + 1) != new.text) return new
+    val hidden = markupHidden(old.text)
+    if (!hidden[k]) return new
+    val lineStart = old.text.lastIndexOf('\n', k - 1) + 1
+    val rest = old.text.substring(lineStart)
+    val prefix = when {
+        rest.startsWith("## ") -> 3
+        rest.startsWith("# ") -> 2
+        else -> 0
+    }
+    if (k - lineStart < prefix) {
+        return TextFieldValue(old.text.removeRange(lineStart, lineStart + prefix), TextRange(lineStart))
+    }
+    var j = k - 1
+    while (j >= 0 && hidden[j]) j--
+    if (j < 0) return TextFieldValue(old.text, TextRange(k))
+    return TextFieldValue(old.text.removeRange(j, j + 1), TextRange(j))
 }
 
 /** Renders the text for reading (note cards): the marks are removed and the styling applied. */
@@ -150,6 +244,11 @@ fun toggleWrap(value: TextFieldValue, mark: String): TextFieldValue {
     if (a == b) {
         val newText = text.substring(0, a) + mark + mark + text.substring(a)
         return TextFieldValue(newText, TextRange(a + n))
+    }
+    if (a >= n && b + n <= text.length && text.substring(a - n, a) == mark && text.substring(b, b + n) == mark) {
+        // The symbols are hidden in the editor, so the selection is usually just the words inside them.
+        val newText = text.removeRange(b, b + n).removeRange(a - n, a)
+        return TextFieldValue(newText, TextRange(a - n, b - n))
     }
     val selected = text.substring(a, b)
     return if (selected.length >= 2 * n + 1 && selected.startsWith(mark) && selected.endsWith(mark)) {

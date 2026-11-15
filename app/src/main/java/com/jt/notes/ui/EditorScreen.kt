@@ -504,7 +504,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     BasicTextField(
                         value = bodyField,
                         onValueChange = { value ->
-                            val next = continueList(bodyField, value)
+                            val next = continueList(bodyField, fixHiddenDelete(bodyField, value))
                             bodyField = next
                             if (next.text != note.body) edit(note.copy(body = next.text))
                         },
