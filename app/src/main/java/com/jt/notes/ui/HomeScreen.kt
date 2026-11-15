@@ -733,7 +733,7 @@ private fun NoteCard(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val soft = p.ink.copy(alpha = 0.78f)
                 if (note.isChecklist) {
-                    val all = parseItems(note.body).filter { it.text.isNotBlank() }
+                    val all = remember(note.body) { parseItems(note.body).filter { it.text.isNotBlank() } }
                     val openItems = all.filter { !it.checked }
                     val done = all.size - openItems.size
                     Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -791,7 +791,7 @@ private fun NoteCard(
                     }
                     if (note.body.isNotBlank()) {
                         Text(
-                            displayMarkup(note.body.take(600)),
+                            remember(note.body) { displayMarkup(note.body.take(600)) },
                             style = MaterialTheme.typography.bodyMedium,
                             color = soft,
                             maxLines = 8,

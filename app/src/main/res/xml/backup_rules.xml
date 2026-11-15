@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android's built-in backup has a small size limit, so pictures are left out
+     and the notes themselves always fit. -->
+<full-backup-content>
+    <exclude domain="file" path="images/" />
+</full-backup-content>

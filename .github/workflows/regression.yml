@@ -1,0 +1,57 @@
+name: Regression tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the optimized app and the test apps
+        env:
+          # A high version number so the build installs over the older one in the upgrade test.
+          GITHUB_RUN_NUMBER: 9999
+        run: ./gradlew assembleRelease assembleDebug assembleDebugAndroidTest --stacktrace
+
+      - name: Fetch the previous build for the upgrade test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 43760329002 -n personal-notes-apk -D old || echo "previous build not available"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: GITHUB_RUN_NUMBER=9999 bash scripts/regression.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-output
+          path: regression-output

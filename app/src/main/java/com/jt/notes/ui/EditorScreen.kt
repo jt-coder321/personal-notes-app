@@ -111,6 +111,16 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     val myLabels = labels.filter { it.id in myLabelIds }
     val pictures = allAttachments.filter { it.noteId == noteId }
 
+    // A brand-new note is ready to type into straight away.
+    val startedBlank = remember(noteId) { note.isBlank() }
+    val bodyFocus = remember { FocusRequester() }
+    LaunchedEffect(noteId) {
+        if (startedBlank && !note.isChecklist) {
+            delay(150)
+            runCatching { bodyFocus.requestFocus() }
+        }
+    }
+
     var showLabels by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var versions by remember { mutableStateOf<List<Version>?>(null) }
@@ -467,7 +477,11 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                             )
                         }
                     }
-                    ChecklistEditor(body = note.body, onBodyChange = { edit(note.copy(body = it)) })
+                    ChecklistEditor(
+                        body = note.body,
+                        focusFirst = startedBlank,
+                        onBodyChange = { edit(note.copy(body = it)) },
+                    )
                 } else {
                     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 28.sp)
                     val dim = p.ink.copy(alpha = 0.35f)
@@ -478,7 +492,10 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                             bodyField = value
                             if (value.text != note.body) edit(note.copy(body = value.text))
                         },
-                        modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 240.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 240.dp)
+                            .focusRequester(bodyFocus),
                         textStyle = bodyStyle.copy(color = p.ink),
                         cursorBrush = SolidColor(p.accent),
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
@@ -733,9 +750,9 @@ private class DragTracker {
 }
 
 @Composable
-private fun ChecklistEditor(body: String, onBodyChange: (String) -> Unit) {
+private fun ChecklistEditor(body: String, focusFirst: Boolean, onBodyChange: (String) -> Unit) {
     val items = remember(body) { parseItems(body) }
-    var focusIndex by remember { mutableIntStateOf(-1) }
+    var focusIndex by remember { mutableIntStateOf(if (focusFirst) 0 else -1) }
     val ink = LocalContentColor.current
     val density = LocalDensity.current
     val rowStep = with(density) { 48.dp.toPx() }
