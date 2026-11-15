@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -36,6 +38,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     private val db = NotesDb.get(app)
     private val dao = db.dao()
     private val prefs = app.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+
+    // Keeps note writes and the editor's reads in order, so reopening a note
+    // (for example when the phone is folded or unfolded) never shows stale text.
+    private val writeLock = Mutex()
 
     val filter = MutableStateFlow<Filter>(Filter.Notes)
     val query = MutableStateFlow("")
@@ -104,11 +110,11 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         return id
     }
 
-    suspend fun getNote(id: Long): Note? = dao.getNote(id)
+    suspend fun getNote(id: Long): Note? = writeLock.withLock { dao.getNote(id) }
 
     /** Writes the note exactly as given. */
     fun save(note: Note) {
-        viewModelScope.launch { dao.updateNote(note) }
+        viewModelScope.launch { writeLock.withLock { dao.updateNote(note) } }
     }
 
     /** Writes a change made outside the editor and marks the note as edited now. */
@@ -117,7 +123,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** Called when leaving the editor: keeps the note, or drops it if nothing was typed. */
     fun finishEditing(note: Note) {
         viewModelScope.launch {
-            if (note.isBlank()) dao.deleteNote(note.id) else dao.updateNote(note)
+            writeLock.withLock {
+                if (note.isBlank()) dao.deleteNote(note.id) else dao.updateNote(note)
+            }
         }
     }
 
