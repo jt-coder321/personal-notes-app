@@ -265,13 +265,10 @@ fun HomeScreen(
                                 Icon(Icons.Outlined.MoreHoriz, contentDescription = "More")
                             }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                MenuRow(
-                                    if (grid) "Show as list" else "Show as grid",
-                                    if (grid) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
-                                ) { menuOpen = false; vm.setGridView(!grid) }
+                                MenuSectionLabel("Sort by")
                                 Sort.entries.forEach { option ->
                                     DropdownMenuItem(
-                                        text = { Text("Sort: ${option.label}") },
+                                        text = { Text(option.label) },
                                         leadingIcon = { Icon(Icons.Outlined.SwapVert, contentDescription = null) },
                                         trailingIcon = {
                                             if (sort == option) Icon(Icons.Outlined.Check, contentDescription = "Selected")
@@ -279,6 +276,11 @@ fun HomeScreen(
                                         onClick = { menuOpen = false; vm.setSort(option) },
                                     )
                                 }
+                                HorizontalDivider()
+                                MenuRow(
+                                    if (grid) "Show as list" else "Show as grid",
+                                    if (grid) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
+                                ) { menuOpen = false; vm.setGridView(!grid) }
                                 if (notes.isNotEmpty()) {
                                     MenuRow("Select notes", Icons.Outlined.Check) {
                                         menuOpen = false
@@ -287,7 +289,11 @@ fun HomeScreen(
                                     }
                                 }
                                 HorizontalDivider()
+                                MenuSectionLabel("Organize")
                                 MenuRow("Edit labels", Icons.Outlined.Edit) { menuOpen = false; showManageLabels = true }
+                                MenuRow("Theme", Icons.Outlined.Palette) { menuOpen = false; showThemeDialog = true }
+                                HorizontalDivider()
+                                MenuSectionLabel("Backup & import")
                                 MenuRow("Back up to a file", Icons.Outlined.CloudUpload) {
                                     menuOpen = false; showBackupDialog = true
                                 }
@@ -306,12 +312,11 @@ fun HomeScreen(
                                     toast("Pick the Google Takeout zip that contains your Keep notes")
                                     keepLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
                                 }
+                                HorizontalDivider()
                                 MenuRow(if (lockOn) "App lock: on" else "App lock: off", Icons.Outlined.Lock) {
                                     menuOpen = false; toggleLock()
                                 }
-                                HorizontalDivider()
                                 MenuRow("Trash", Icons.Outlined.Delete) { menuOpen = false; vm.filter.value = Filter.Trash }
-                                MenuRow("Theme", Icons.Outlined.Palette) { menuOpen = false; showThemeDialog = true }
                                 MenuRow("Version " + appVersion(), Icons.Outlined.Info) { menuOpen = false }
                             }
                         }
@@ -651,6 +656,16 @@ private fun MenuRow(text: String, icon: ImageVector, onClick: () -> Unit) {
         text = { Text(text) },
         leadingIcon = { Icon(icon, contentDescription = null) },
         onClick = onClick,
+    )
+}
+
+@Composable
+private fun MenuSectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = LocalPalette.current.muted,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
     )
 }
 
