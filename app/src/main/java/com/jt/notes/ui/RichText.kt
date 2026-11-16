@@ -89,6 +89,13 @@ private fun setCoverage(spans: List<Span>, fmt: Fmt, a: Int, b: Int, want: Boole
     return rest
 }
 
+/** Removes every style from [start, end), splitting ranges that run past it. Scanned text stays plain. */
+fun clearSpanRange(r: Rich, start: Int, end: Int): Rich {
+    var spans = r.spans
+    for (f in Fmt.values()) spans = setCoverage(spans, f, start, end, false)
+    return r.copy(spans = normalize(r.text, spans))
+}
+
 private fun lineStart(text: String, pos: Int): Int = text.lastIndexOf('\n', pos - 1) + 1
 
 private fun lineEnd(text: String, pos: Int): Int = text.indexOf('\n', pos).let { if (it < 0) text.length else it }
@@ -359,7 +366,15 @@ fun richToMarkdown(r: Rich): String {
 
 // ----- display -----
 
-fun richAnnotated(r: Rich): AnnotatedString = buildAnnotatedString {
+/** A [[Note title]] reference in the editor text. The same pattern lives in NoteLinks.kt. */
+private val LINK_REF = Regex("\\[\\[([^\\[\\]]+)\\]\\]")
+
+/**
+ * Styles the editor text. Titles in [linkTitles] that appear as [[title]]
+ * are underlined and tinted; unresolved [[text]] stays plain. This only
+ * adds display styles: the markers and spans are untouched.
+ */
+fun richAnnotated(r: Rich, linkTitles: Set<String> = emptySet(), linkColor: Color = Color.Unspecified): AnnotatedString = buildAnnotatedString {
     append(r.text)
     for (sp in r.spans) {
         val style = when (sp.fmt) {
@@ -376,5 +391,15 @@ fun richAnnotated(r: Rich): AnnotatedString = buildAnnotatedString {
         }
         addStyle(style, sp.start.coerceIn(0, r.text.length), sp.end.coerceIn(0, r.text.length))
     }
+    if (linkTitles.isNotEmpty()) {
+        for (match in LINK_REF.findAll(r.text)) {
+            if (match.groupValues[1].trim() in linkTitles) {
+                addStyle(
+                    SpanStyle(textDecoration = TextDecoration.Underline, color = linkColor),
+                    match.range.first,
+                    match.range.last + 1,
+                )
+            }
+        }
+    }
 }
-

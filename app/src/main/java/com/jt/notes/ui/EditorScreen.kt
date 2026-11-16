@@ -5,6 +5,7 @@ import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.speech.RecognizerIntent
@@ -49,14 +50,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jt.notes.NotesViewModel
+import com.jt.notes.NoteAuth
+import com.jt.notes.PinnedNote
 import com.jt.notes.PlaceReminders
 import com.jt.notes.ReminderPlan
 import com.jt.notes.Undo
@@ -66,12 +71,19 @@ import com.jt.notes.data.ClipPlayer
 import com.jt.notes.data.Images
 import com.jt.notes.data.Note
 import com.jt.notes.data.NoteExport
+import com.jt.notes.data.NoteImageShare
+import com.jt.notes.data.Ocr
 import com.jt.notes.data.Version
 import com.jt.notes.data.VoiceRecorder
+import com.jt.notes.data.backlinksFor
 import com.jt.notes.data.checklistBodyToText
+import com.jt.notes.data.extractLinkTitles
+import com.jt.notes.data.formatDue
 import com.jt.notes.data.isBlank
+import com.jt.notes.data.isOverdue
 import com.jt.notes.data.itemsToBody
 import com.jt.notes.data.parseItems
+import com.jt.notes.data.resolveLinkTitle
 import com.jt.notes.data.textToChecklistBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -80,6 +92,7 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
+import java.time.LocalDate
 
 /** Remembers whether the editor already saved on its way out. */
 private class ExitState {
@@ -112,11 +125,26 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     }
     val note = loaded ?: return
 
+    // A locked note needs one biometric check per visit; leaving re-locks it.
+    var noteUnlocked by remember(noteId) { mutableStateOf(false) }
+
     val labels by vm.labels.collectAsStateWithLifecycle()
     val links by vm.noteLabels.collectAsStateWithLifecycle()
     val allAttachments by vm.attachments.collectAsStateWithLifecycle()
     val allClips by vm.audioClips.collectAsStateWithLifecycle()
     val placeReminders by vm.placeReminders.collectAsStateWithLifecycle()
+    val allNotes by vm.allNotes.collectAsStateWithLifecycle()
+    // [[Note title]] links: which titles in this body point at a real note,
+    // and which notes point back here.
+    val linkTitles = remember(note.body, allNotes) {
+        extractLinkTitles(note.body).filter { title -> resolveLinkTitle(title, allNotes) != null }.toSet()
+    }
+    val noteLinks = remember(note.body, allNotes) {
+        extractLinkTitles(note.body).distinct().mapNotNull { title ->
+            resolveLinkTitle(title, allNotes)?.let { title to it }
+        }
+    }
+    val backlinks = remember(note.id, note.title, allNotes) { backlinksFor(note, allNotes) }
     val myLabelIds = remember(links, noteId) { links.filter { it.noteId == noteId }.map { it.labelId }.toSet() }
     val myLabels = labels.filter { it.id in myLabelIds }
     val pictures = allAttachments.filter { it.noteId == noteId }
@@ -133,6 +161,8 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
 
     // Find in note: text mode only, selection-based navigation.
     var findOpen by remember { mutableStateOf(false) }
+    // Focus mode: title and body only, no chrome. Per-editor-session state.
+    var focusMode by remember(noteId) { mutableStateOf(false) }
     var findQuery by remember { mutableStateOf("") }
     var findIndex by remember { mutableStateOf(0) }
 
@@ -148,8 +178,13 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
 
     var showLabels by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    var pinned by remember(noteId) { mutableStateOf(PinnedNote.isPinned(context, noteId)) }
     var versions by remember { mutableStateOf<List<Version>?>(null) }
     var pendingPhoto by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingOcrPhoto by rememberSaveable { mutableStateOf<String?>(null) }
+    var showOcrChoice by remember { mutableStateOf(false) }
+    var showMergePicker by remember { mutableStateOf(false) }
+    var mergeTarget by remember { mutableStateOf<Note?>(null) }
 
     fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 
@@ -193,6 +228,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     /** Leaves the editor, writing [finalNote] (or dropping it if it is empty). */
     fun leave(finalNote: Note, offerUndo: Undo? = null) {
         exit.handled = true
+        PinnedNote.refreshIfPinned(context, finalNote)
         vm.finishEditing(finalNote, original, offerUndo)
         onClose()
     }
@@ -222,6 +258,60 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         }
     }
 
+    // ----- scan text from a photo -----
+
+    /** Adds recognized text at the cursor, or as new list items in a checklist. */
+    fun insertScannedText(text: String) {
+        val current = latest
+        if (current.isChecklist) {
+            val items = parseItems(current.body).filter { it.text.isNotBlank() } +
+                text.split("\n").filter { it.isNotBlank() }.map { CheckItem(it.trim(), false) }
+            edit(current.copy(body = itemsToBody(items)))
+            toast("Scanned text added as list items")
+        } else {
+            val pos = rich.selection.min.coerceIn(0, rich.text.length)
+            val end = rich.selection.max.coerceIn(0, rich.text.length)
+            val atEnd = pos == rich.text.length
+            val insert = (if (atEnd && rich.text.isNotEmpty() && !rich.text.endsWith("\n")) "\n" else "") + text
+            val newText = rich.text.substring(0, pos) + insert + rich.text.substring(end)
+            val next = clearSpanRange(
+                richEdit(rich, newText, TextRange(pos + insert.length)),
+                pos,
+                pos + insert.length,
+            )
+            rich = next
+            composing = null
+            val markdown = richToMarkdown(next)
+            if (markdown != note.body) edit(note.copy(body = markdown))
+            toast("Scanned text added")
+        }
+    }
+
+    fun scanBitmap(bitmap: Bitmap) {
+        Ocr.recognize(bitmap) { text ->
+            when {
+                text == null -> toast("Text recognition failed. Try again once the model has downloaded.")
+                text.isBlank() -> toast("No text was found in that photo")
+                else -> insertScannedText(text.trim())
+            }
+        }
+    }
+
+    fun scanPickedPhoto(uri: Uri) {
+        scope.launch {
+            val bitmap = withContext(Dispatchers.IO) { Ocr.loadBitmap(context, uri) }
+            if (bitmap == null) toast("That photo could not be read") else scanBitmap(bitmap)
+        }
+    }
+
+    /** The camera shot is not attached to the note; the unused-picture sweep removes it later. */
+    fun scanCameraPhoto(name: String) {
+        scope.launch {
+            val bitmap = withContext(Dispatchers.IO) { Images.load(context, name, 1600) }
+            if (bitmap == null) toast("That photo could not be read") else scanBitmap(bitmap)
+        }
+    }
+
     // ----- things that open other screens -----
 
     val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -231,6 +321,14 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         val name = pendingPhoto
         if (saved && name != null) vm.addImageFile(noteId, name)
         pendingPhoto = null
+    }
+    val pickPictureForOcr = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scanPickedPhoto(uri)
+    }
+    val takePictureForOcr = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        val name = pendingOcrPhoto
+        if (saved && name != null) scanCameraPhoto(name)
+        pendingOcrPhoto = null
     }
     val savePdf = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/pdf")
@@ -301,12 +399,31 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         if (granted) startRecording() else toast("Microphone permission is needed to record a voice note")
     }
 
+    // A voice-note shortcut opens the editor with recording started.
+    LaunchedEffect(noteId) {
+        if (vm.autoRecordFor.value == noteId) {
+            vm.autoRecordFor.value = null
+            askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     fun startCamera() {
         val name = Images.newName()
         pendingPhoto = name
         try {
             val uri = FileProvider.getUriForFile(context, "com.jt.notes.files", Images.file(context, name))
             takePicture.launch(uri)
+        } catch (e: Exception) {
+            toast("The camera could not be opened")
+        }
+    }
+
+    fun startOcrCamera() {
+        val name = Images.newName()
+        pendingOcrPhoto = name
+        try {
+            val uri = FileProvider.getUriForFile(context, "com.jt.notes.files", Images.file(context, name))
+            takePictureForOcr.launch(uri)
         } catch (e: Exception) {
             toast("The camera could not be opened")
         }
@@ -464,6 +581,25 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         Modifier.fillMaxSize().background(background).windowInsetsPadding(insets)
     }
 
+    // A locked note stays shut until the person proves it is them.
+    if (note.locked && !noteUnlocked) {
+        LockGate(
+            note = note,
+            embedded = embedded,
+            modifier = frame,
+            onUnlock = {
+                val activity = context as? FragmentActivity
+                if (activity != null) {
+                    NoteAuth.prompt(activity, "Unlock note") { noteUnlocked = true }
+                } else {
+                    toast("Unlock is not available here")
+                }
+            },
+            onBack = { leave(note) },
+        )
+        return
+    }
+
     CompositionLocalProvider(LocalContentColor provides p.ink) {
         Column(frame) {
             // Top row
@@ -471,6 +607,13 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (focusMode) {
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { focusMode = false }) {
+                        Icon(Icons.Outlined.FullscreenExit, contentDescription = "Exit focus mode")
+                    }
+                }
+                if (!focusMode) {
                 IconButton(onClick = { leave(note) }) {
                     if (embedded) Icon(Icons.Outlined.Close, contentDescription = "Close note")
                     else Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
@@ -547,6 +690,9 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                             pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         }
                         EditorMenuRow("Take photo", Icons.Outlined.PhotoCamera) { menuOpen = false; startCamera() }
+                        EditorMenuRow("Scan text from photo", Icons.Outlined.DocumentScanner) {
+                            menuOpen = false; showOcrChoice = true
+                        }
                         EditorMenuRow("Add sketch", Icons.Outlined.Edit) { menuOpen = false; showDraw = true }
                         EditorMenuRow("Dictate", Icons.Outlined.Mic) { menuOpen = false; startSpeech() }
                         EditorMenuRow("Record voice note", Icons.Outlined.Mic) {
@@ -577,19 +723,61 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                                 toast("Template saved")
                             }
                         }
+                        EditorMenuRow(
+                            if (note.locked) "Unlock note" else "Lock note",
+                            if (note.locked) Icons.Outlined.LockOpen else Icons.Outlined.Lock,
+                        ) {
+                            menuOpen = false
+                            val locking = !note.locked
+                            vm.setNoteLocked(noteId, locking)
+                            edit(note.copy(locked = locking))
+                            if (locking) noteUnlocked = false
+                        }
+                        if (!note.locked) {
+                            EditorMenuRow(
+                                if (pinned) "Unpin from notifications" else "Pin to notifications",
+                                if (pinned) Icons.Outlined.NotificationsOff else Icons.Outlined.Notifications,
+                            ) {
+                                menuOpen = false
+                                if (pinned) {
+                                    PinnedNote.unpin(context)
+                                    pinned = false
+                                } else {
+                                    PinnedNote.pin(context, latest)
+                                    pinned = true
+                                }
+                            }
+                        }
+                        EditorMenuRow("Merge into another note", Icons.Outlined.MergeType) {
+                            menuOpen = false; showMergePicker = true
+                        }
+                        EditorMenuRow("Focus mode", Icons.Outlined.Fullscreen) {
+                            menuOpen = false; focusMode = true
+                        }
                         HorizontalDivider()
                         EditorMenuRow("Share as text", Icons.Outlined.Share) { menuOpen = false; shareAsText() }
+                        EditorMenuRow("Share as image", Icons.Outlined.Image) {
+                            menuOpen = false
+                            scope.launch {
+                                val file = withContext(Dispatchers.IO) {
+                                    runCatching { NoteImageShare.renderToFile(context, latest) }.getOrNull()
+                                }
+                                if (file == null) toast("The image could not be shared")
+                                else NoteImageShare.shareFile(context, file, latest.title)
+                            }
+                        }
                         EditorMenuRow("Save as PDF", Icons.Outlined.PictureAsPdf) {
                             menuOpen = false
                             savePdf.launch((note.title.ifBlank { "note" }).take(40) + ".pdf")
                         }
                     }
                 }
+                }
             }
 
             // Find bar: text notes only. Matches move the cursor; there is no
             // persistent highlighting.
-            if (findOpen && !note.isChecklist) {
+            if (findOpen && !note.isChecklist && !focusMode) {
                 Row(
                     Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -817,7 +1005,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 28.sp)
                     val dim = p.ink.copy(alpha = 0.35f)
                     BasicTextField(
-                        value = TextFieldValue(richAnnotated(rich), rich.selection, composing),
+                        value = TextFieldValue(richAnnotated(rich, linkTitles, p.accent), rich.selection, composing),
                         onValueChange = { value ->
                             val next = richEdit(rich, value.text, value.selection)
                             composing = if (next.text == value.text) value.composition else null
@@ -891,9 +1079,83 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         myLabels.forEach { LabelChip(it.name) }
                     }
                 }
+
+                // Note links are tappable chips, like the web links above: taps
+                // inside the text field move the cursor, so the chips carry
+                // the navigation. Unresolved [[text]] gets no chip.
+                if (noteLinks.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        noteLinks.forEach { (title, target) ->
+                            Surface(
+                                onClick = { vm.pendingOpen.value = target.id },
+                                shape = CircleShape,
+                                color = p.ink.copy(alpha = 0.08f),
+                                contentColor = p.ink,
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp).widthIn(max = 260.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Link,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Text(
+                                        title,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (backlinks.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "Linked from",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = p.ink.copy(alpha = 0.7f),
+                        )
+                        backlinks.forEach { source ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { vm.pendingOpen.value = source.id }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Link,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Text(
+                                    source.title.ifBlank { "Untitled note" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // Bottom: formatting for text notes and when it was last edited, then the tool bar
+            // The live word count sits at the end of the formatting row, so it never overlaps it.
+            val words = remember(note.body, note.isChecklist) { countWords(note) }
+            if (!focusMode) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -941,7 +1203,16 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
+                Text(
+                    wordCountLabel(words),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = p.ink.copy(alpha = 0.6f),
+                    maxLines = 1,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
             }
+            }
+            if (!focusMode) {
             Surface(
                 shape = CircleShape,
                 color = p.bar,
@@ -1002,6 +1273,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     }
                 }
             }
+            }
         }
     }
 
@@ -1046,6 +1318,63 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
             onDismiss = { showPlaceDialog = false },
         )
     }
+    if (showOcrChoice) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showOcrChoice = false },
+            title = { Text("Scan text from photo") },
+            text = { Text("Pick a photo, or take one, and the words in it are added to this note.") },
+            confirmButton = {
+                Row {
+                    androidx.compose.material3.TextButton(onClick = {
+                        showOcrChoice = false
+                        pickPictureForOcr.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }) { Text("Choose photo") }
+                    androidx.compose.material3.TextButton(onClick = {
+                        showOcrChoice = false
+                        startOcrCamera()
+                    }) { Text("Take photo") }
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showOcrChoice = false }) { Text("Cancel") }
+            },
+        )
+    }
+    if (showMergePicker) {
+        MergeTargetDialog(
+            notes = allNotes,
+            excludeId = noteId,
+            onPick = { target -> showMergePicker = false; mergeTarget = target },
+            onDismiss = { showMergePicker = false },
+        )
+    }
+    mergeTarget?.let { target ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { mergeTarget = null },
+            title = { Text("Merge into \"${target.title.ifBlank { "Untitled note" }}\" ?") },
+            text = {
+                Text(
+                    "This note's text will be added to that note, and this note " +
+                        "will be moved to Trash. The other note's earlier text stays in its version history.",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    val picked = target
+                    mergeTarget = null
+                    vm.mergeNotes(noteId, picked.id) { message ->
+                        toast(message)
+                        leave(latest.copy(trashedAt = System.currentTimeMillis(), pinned = false))
+                    }
+                }) { Text("Merge") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { mergeTarget = null }) { Text("Cancel") }
+            },
+        )
+    }
     if (showRecording) {
         var elapsed by remember { mutableStateOf(0L) }
         LaunchedEffect(Unit) {
@@ -1075,6 +1404,39 @@ private fun EditorMenuRow(text: String, icon: ImageVector, onClick: () -> Unit) 
         leadingIcon = { Icon(icon, contentDescription = null) },
         onClick = onClick,
     )
+}
+
+/** The shut door of a locked note: title, lock, and one way in. */
+@Composable
+private fun LockGate(
+    note: Note,
+    embedded: Boolean,
+    modifier: Modifier = Modifier,
+    onUnlock: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val p = LocalPalette.current
+    Box(modifier, contentAlignment = Alignment.Center) {
+        IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
+            if (embedded) Icon(Icons.Outlined.Close, contentDescription = "Close note")
+            else Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+        }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(32.dp),
+        ) {
+            Icon(Icons.Outlined.Lock, contentDescription = null, tint = p.ink, modifier = Modifier.size(40.dp))
+            Text(
+                note.title.ifBlank { "Locked note" },
+                style = MaterialTheme.typography.titleLarge,
+                color = p.ink,
+                textAlign = TextAlign.Center,
+            )
+            Text("This note is locked", style = MaterialTheme.typography.bodyMedium, color = p.muted)
+            androidx.compose.material3.Button(onClick = onUnlock) { Text("Unlock") }
+        }
+    }
 }
 
 /** One color choice in the tool bar. Index 0 is "no color". */
@@ -1152,6 +1514,26 @@ private fun ChecklistEditor(body: String, focusFirst: Boolean, onBodyChange: (St
     val drag = remember { DragTracker() }
 
     fun update(list: List<CheckItem>) = onBodyChange(itemsToBody(list))
+
+    // Due dates: the platform date picker, with a neutral button to clear.
+    // The dialog is modal, so the item list cannot change while it is up.
+    val dueContext = LocalContext.current
+    fun showDuePicker(index: Int, current: String?) {
+        val initial = runCatching { LocalDate.parse(current) }.getOrDefault(LocalDate.now())
+        DatePickerDialog(
+            dueContext,
+            { _, year, month, day ->
+                val picked = LocalDate.of(year, month + 1, day).toString()
+                update(items.toMutableList().also { it[index] = items[index].copy(due = picked) })
+            },
+            initial.year, initial.monthValue - 1, initial.dayOfMonth,
+        ).apply {
+            setButton(android.app.AlertDialog.BUTTON_NEUTRAL, "Clear date") { _, _ ->
+                update(items.toMutableList().also { it[index] = items[index].copy(due = null) })
+            }
+            show()
+        }
+    }
 
     // Dragging a handle up or down moves the item past its neighbours;
     // dragging it right or left makes it a sub-item or a normal item.
@@ -1270,6 +1652,30 @@ private fun ChecklistEditor(body: String, focusFirst: Boolean, onBodyChange: (St
                 color = ink.copy(alpha = if (item.checked) 0.65f else 1f),
                 modifier = Modifier.weight(1f).focusRequester(focusRequester),
             )
+            // Due date: a chip showing the date, or a calendar affordance to
+            // set one. Overdue open items get the error tint.
+            val due = item.due
+            val overdue = due != null && !item.checked && isOverdue(due)
+            androidx.compose.material3.TextButton(
+                onClick = { showDuePicker(index, due) },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp),
+            ) {
+                if (due != null) {
+                    Text(
+                        formatDue(due),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (overdue) MaterialTheme.colorScheme.error else ink.copy(alpha = 0.75f),
+                    )
+                } else {
+                    Icon(
+                        Icons.Outlined.CalendarMonth,
+                        contentDescription = "Set a due date",
+                        tint = ink.copy(alpha = 0.45f),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
             IconButton(onClick = { update(items.toMutableList().also { it.removeAt(index) }) }) {
                 Icon(
                     Icons.Outlined.Close,
@@ -1366,6 +1772,19 @@ private fun formatDuration(ms: Long): String {
     return "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}"
 }
 
+/** Words in the note's plain text: markup stripped for text notes, item text for checklists. */
+private fun countWords(note: Note): Int {
+    val plain = if (note.isChecklist) checklistBodyToText(note.body) else NoteExport.plainFromMarkup(note.body)
+    return plain.split(Regex("\\s+")).count { it.isNotBlank() }
+}
+
+/** "42 words · 1 min read" at 200 words a minute, rounded up. */
+private fun wordCountLabel(words: Int): String {
+    if (words == 0) return "0 words"
+    val minutes = (words + 199) / 200
+    return "$words words \u00b7 $minutes min read"
+}
+
 /** Every start offset of [query] in [text], ignoring case. Empty when the query is blank. */
 private fun findAllMatches(text: String, query: String): List<Int> {
     if (query.isEmpty()) return emptyList()
@@ -1402,5 +1821,4 @@ private fun Stepper(label: String, value: String, onMinus: () -> Unit, onPlus: (
         ) { Text("+", style = MaterialTheme.typography.titleMedium) }
     }
 }
-
 
