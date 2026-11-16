@@ -91,6 +91,7 @@ fun HomeScreen(
     val context = LocalContext.current
     var searching by rememberSaveable { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    var expandedMenuGroup by remember { mutableStateOf<String?>(null) }
     var showManageLabels by remember { mutableStateOf(false) }
     var confirmEmptyTrash by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
@@ -265,52 +266,81 @@ fun HomeScreen(
                                 Icon(Icons.Outlined.MoreHoriz, contentDescription = "More")
                             }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                MenuSectionLabel("Sort by")
-                                Sort.entries.forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text(option.label) },
-                                        leadingIcon = { Icon(Icons.Outlined.SwapVert, contentDescription = null) },
-                                        trailingIcon = {
-                                            if (sort == option) Icon(Icons.Outlined.Check, contentDescription = "Selected")
-                                        },
-                                        onClick = { menuOpen = false; vm.setSort(option) },
-                                    )
-                                }
-                                HorizontalDivider()
-                                MenuRow(
-                                    if (grid) "Show as list" else "Show as grid",
-                                    if (grid) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
-                                ) { menuOpen = false; vm.setGridView(!grid) }
-                                if (notes.isNotEmpty()) {
-                                    MenuRow("Select notes", Icons.Outlined.Check) {
-                                        menuOpen = false
-                                        arrangeList = null
-                                        selectMode = true
+                                MenuGroupHeader(
+                                    text = "Sort by",
+                                    icon = Icons.Outlined.SwapVert,
+                                    expanded = expandedMenuGroup == "sort",
+                                    onClick = { expandedMenuGroup = if (expandedMenuGroup == "sort") null else "sort" },
+                                )
+                                if (expandedMenuGroup == "sort") {
+                                    Sort.entries.forEach { option ->
+                                        DropdownMenuItem(
+                                            text = { Text(option.label) },
+                                            leadingIcon = { Icon(Icons.Outlined.SwapVert, contentDescription = null) },
+                                            trailingIcon = {
+                                                if (sort == option) Icon(Icons.Outlined.Check, contentDescription = "Selected")
+                                            },
+                                            onClick = { menuOpen = false; vm.setSort(option) },
+                                        )
                                     }
                                 }
                                 HorizontalDivider()
-                                MenuSectionLabel("Organize")
-                                MenuRow("Edit labels", Icons.Outlined.Edit) { menuOpen = false; showManageLabels = true }
-                                MenuRow("Theme", Icons.Outlined.Palette) { menuOpen = false; showThemeDialog = true }
+                                MenuGroupHeader(
+                                    text = "View",
+                                    icon = if (grid) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
+                                    expanded = expandedMenuGroup == "view",
+                                    onClick = { expandedMenuGroup = if (expandedMenuGroup == "view") null else "view" },
+                                )
+                                if (expandedMenuGroup == "view") {
+                                    MenuRow(
+                                        if (grid) "Show as list" else "Show as grid",
+                                        if (grid) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
+                                    ) { menuOpen = false; vm.setGridView(!grid) }
+                                    if (notes.isNotEmpty()) {
+                                        MenuRow("Select notes", Icons.Outlined.Check) {
+                                            menuOpen = false
+                                            arrangeList = null
+                                            selectMode = true
+                                        }
+                                    }
+                                }
                                 HorizontalDivider()
-                                MenuSectionLabel("Backup & import")
-                                MenuRow("Back up to a file", Icons.Outlined.CloudUpload) {
-                                    menuOpen = false; showBackupDialog = true
+                                MenuGroupHeader(
+                                    text = "Organize",
+                                    icon = Icons.Outlined.Edit,
+                                    expanded = expandedMenuGroup == "organize",
+                                    onClick = { expandedMenuGroup = if (expandedMenuGroup == "organize") null else "organize" },
+                                )
+                                if (expandedMenuGroup == "organize") {
+                                    MenuRow("Edit labels", Icons.Outlined.Edit) { menuOpen = false; showManageLabels = true }
+                                    MenuRow("Theme", Icons.Outlined.Palette) { menuOpen = false; showThemeDialog = true }
                                 }
-                                MenuRow("Restore from a file", Icons.Outlined.CloudDownload) {
-                                    menuOpen = false; importLauncher.launch(arrayOf("*/*"))
-                                }
-                                MenuRow(
-                                    if (autoFolder == null) "Automatic backup: off" else "Automatic backup: on",
-                                    Icons.Outlined.Schedule,
-                                ) {
-                                    menuOpen = false
-                                    if (autoFolder == null) folderLauncher.launch(null) else showAutoBackupDialog = true
-                                }
-                                MenuRow("Import from Google Keep", Icons.Outlined.FileDownload) {
-                                    menuOpen = false
-                                    toast("Pick the Google Takeout zip that contains your Keep notes")
-                                    keepLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
+                                HorizontalDivider()
+                                MenuGroupHeader(
+                                    text = "Backup & import",
+                                    icon = Icons.Outlined.CloudUpload,
+                                    expanded = expandedMenuGroup == "backup",
+                                    onClick = { expandedMenuGroup = if (expandedMenuGroup == "backup") null else "backup" },
+                                )
+                                if (expandedMenuGroup == "backup") {
+                                    MenuRow("Back up to a file", Icons.Outlined.CloudUpload) {
+                                        menuOpen = false; showBackupDialog = true
+                                    }
+                                    MenuRow("Restore from a file", Icons.Outlined.CloudDownload) {
+                                        menuOpen = false; importLauncher.launch(arrayOf("*/*"))
+                                    }
+                                    MenuRow(
+                                        if (autoFolder == null) "Automatic backup: off" else "Automatic backup: on",
+                                        Icons.Outlined.Schedule,
+                                    ) {
+                                        menuOpen = false
+                                        if (autoFolder == null) folderLauncher.launch(null) else showAutoBackupDialog = true
+                                    }
+                                    MenuRow("Import from Google Keep", Icons.Outlined.FileDownload) {
+                                        menuOpen = false
+                                        toast("Pick the Google Takeout zip that contains your Keep notes")
+                                        keepLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
+                                    }
                                 }
                                 HorizontalDivider()
                                 MenuRow(if (lockOn) "App lock: on" else "App lock: off", Icons.Outlined.Lock) {
@@ -660,12 +690,22 @@ private fun MenuRow(text: String, icon: ImageVector, onClick: () -> Unit) {
 }
 
 @Composable
-private fun MenuSectionLabel(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = LocalPalette.current.muted,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+private fun MenuGroupHeader(
+    text: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(text, fontWeight = FontWeight.SemiBold) },
+        leadingIcon = { Icon(icon, contentDescription = null) },
+        trailingIcon = {
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+            )
+        },
+        onClick = onClick,
     )
 }
 
@@ -1096,5 +1136,6 @@ private fun appVersion(): String {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
 }
+
 
 
