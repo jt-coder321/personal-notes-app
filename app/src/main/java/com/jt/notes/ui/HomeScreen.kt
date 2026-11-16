@@ -66,8 +66,10 @@ import com.jt.notes.NotesViewModel
 import com.jt.notes.Sort
 import com.jt.notes.data.LinkPreview
 import com.jt.notes.data.LinkPreviews
+import com.jt.notes.data.UpdateCheck
 import com.jt.notes.data.parseItems
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -109,6 +111,11 @@ fun HomeScreen(
     var showReminders by remember { mutableStateOf(false) }
     var showTemplates by remember { mutableStateOf(false) }
     var showCalendar by remember { mutableStateOf(false) }
+    // Self-updates: the release on offer, while its APK downloads, and while a check runs.
+    var updateOffer by remember { mutableStateOf<UpdateCheck.Update?>(null) }
+    var updateDownloading by remember { mutableStateOf(false) }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    val updateScope = rememberCoroutineScope()
     val themeId by vm.theme.collectAsStateWithLifecycle()
     var exportPassword by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf(setOf<Long>()) }
@@ -126,7 +133,30 @@ fun HomeScreen(
 
     fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 
+    // A check the person asked for always says what it found; the launch check stays silent.
+    fun checkForUpdates(manual: Boolean) {
+        if (checkingUpdate) return
+        checkingUpdate = true
+        updateScope.launch {
+            try {
+                if (manual) {
+                    when (val result = UpdateCheck.manualCheck(context)) {
+                        is UpdateCheck.ManualResult.Available -> updateOffer = result.update
+                        UpdateCheck.ManualResult.UpToDate -> toast("You're up to date")
+                        UpdateCheck.ManualResult.Failed ->
+                            toast("Couldn't check for updates. Check your connection and try again.")
+                    }
+                } else {
+                    UpdateCheck.autoCheck(context)?.let { updateOffer = it }
+                }
+            } finally {
+                checkingUpdate = false
+            }
+        }
+    }
+
     LaunchedEffect(Unit) { vm.refreshLastBackup() }
+    LaunchedEffect(Unit) { checkForUpdates(manual = false) }
 
     // Undo stays on offer for a few seconds.
     val undoId = undo?.id
@@ -395,7 +425,7 @@ fun HomeScreen(
                                     menuOpen = false; toggleLock()
                                 }
                                 MenuRow("Trash", Icons.Outlined.Delete) { menuOpen = false; vm.filter.value = Filter.Trash }
-                                MenuRow("Version " + appVersion(), Icons.Outlined.Info) { menuOpen = false }
+                                MenuRow("Version " + appVersion(), Icons.Outlined.Info) { menuOpen = false; checkForUpdates(manual = true) }
                             }
                         }
                     }
@@ -747,6 +777,33 @@ fun HomeScreen(
                 }) { Text("Empty Trash") }
             },
             dismissButton = { TextButton(onClick = { confirmEmptyTrash = false }) { Text("Cancel") } },
+        )
+    }
+    updateOffer?.let { update ->
+        UpdateAvailableDialog(
+            version = update.version,
+            downloading = updateDownloading,
+            onDownload = {
+                if (!updateDownloading) {
+                    updateDownloading = true
+                    updateScope.launch {
+                        val file = UpdateCheck.download(context, update)
+                        updateDownloading = false
+                        if (file != null) {
+                            updateOffer = null
+                            if (!UpdateCheck.install(context, file)) {
+                                toast("Couldn't open the installer.")
+                            }
+                        } else {
+                            toast("Download failed. Try again later.")
+                        }
+                    }
+                }
+            },
+            onDismiss = {
+                UpdateCheck.dismissVersion(context, update.version)
+                updateOffer = null
+            },
         )
     }
 }

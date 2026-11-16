@@ -682,3 +682,37 @@ fun PlaceReminderDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/** Offers a newer release: download it and hand it to Android's installer, or put it off. */
+@Composable
+fun UpdateAvailableDialog(
+    version: String,
+    downloading: Boolean,
+    onDownload: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!downloading) onDismiss() },
+        title = { Text("Update available") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Version $version is ready. Download it and Android will ask before installing.")
+                if (downloading) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Text("Downloading…", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !downloading, onClick = onDownload) { Text("Download and install") }
+        },
+        dismissButton = {
+            TextButton(enabled = !downloading, onClick = onDismiss) { Text("Later") }
+        },
+    )
+}
