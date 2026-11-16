@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.dp
+import com.jt.notes.data.scheduleDueDateWorker
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -56,6 +57,7 @@ class MainActivity : FragmentActivity() {
     companion object {
         const val ACTION_NEW_NOTE = "com.jt.notes.NEW_NOTE"
         const val ACTION_NEW_CHECKLIST = "com.jt.notes.NEW_CHECKLIST"
+        const val ACTION_NEW_VOICE_NOTE = "com.jt.notes.NEW_VOICE_NOTE"
         const val ACTION_OPEN_NOTE = "com.jt.notes.OPEN_NOTE"
 
         /** Away from the app for longer than this, and the lock comes back. */
@@ -86,6 +88,7 @@ class MainActivity : FragmentActivity() {
         }
         val lastCrash = if (crashFile.exists()) crashFile.readText().also { crashFile.delete() } else null
         Reminders.ensureChannel(this)
+        scheduleDueDateWorker(this)
         locked = lockEnabled() && !unlocked
         if (savedInstanceState == null) handleIntent(intent)
         setContent {
@@ -127,6 +130,7 @@ class MainActivity : FragmentActivity() {
         ChecklistWidget.refresh(this)
         LargeRecentNotesWidget.refresh(this)
         CompactNotesWidget.refresh(this)
+        SingleNoteWidget.refresh(this)
     }
 
     override fun onStart() {
@@ -149,6 +153,7 @@ class MainActivity : FragmentActivity() {
             }
             ACTION_NEW_NOTE -> vm.createAndOpen(isChecklist = false)
             ACTION_NEW_CHECKLIST -> vm.createAndOpen(isChecklist = true)
+            ACTION_NEW_VOICE_NOTE -> vm.createVoiceNote()
             ACTION_OPEN_NOTE -> {
                 val id = intent.getLongExtra(Reminders.EXTRA_NOTE_ID, -1L)
                 if (id > 0) {
@@ -261,5 +266,4 @@ fun App(vm: NotesViewModel = viewModel()) {
         }
     }
 }
-
 

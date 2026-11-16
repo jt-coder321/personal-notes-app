@@ -44,10 +44,10 @@ class RecentNotesWidget : AppWidgetProvider() {
     companion object {
         private val ROWS = listOf(R.id.recent_1, R.id.recent_2, R.id.recent_3, R.id.recent_4)
 
-        /** Pinned notes first, then most recently edited, skipping trash and archive. */
+        /** Pinned notes first, then most recently edited, skipping trash, archive and locked notes. */
         internal suspend fun loadNotes(context: Context, max: Int): List<Note> =
             NotesDb.get(context).dao().allNotes()
-                .filter { it.trashedAt == null && !it.archived }
+                .filter { it.trashedAt == null && !it.archived && !it.locked }
                 .sortedWith(compareByDescending<Note> { it.pinned }.thenByDescending { it.updatedAt })
                 .take(max)
 

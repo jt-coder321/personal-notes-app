@@ -170,7 +170,8 @@ private fun AlarmScreen(noteId: Long, onSnooze: () -> Unit, onDone: () -> Unit) 
                 color = ComposeColor.White,
                 textAlign = TextAlign.Center,
             )
-            val snippet = note?.let {
+            // A locked note shows its title only: the alarm screen sits over the lock screen.
+            val snippet = if (note?.locked == true) "" else note?.let {
                 if (it.isChecklist) {
                     parseItems(it.body).filter { item -> !item.checked && item.text.isNotBlank() }
                         .joinToString("\n") { item -> item.text }

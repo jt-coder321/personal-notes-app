@@ -60,10 +60,10 @@ class ChecklistWidget : AppWidgetProvider() {
         const val ACTION_TOGGLE = "com.jt.notes.CHECKLIST_TOGGLE"
         const val EXTRA_ITEM = "item"
 
-        /** The checklist on show: a pinned one first, otherwise the most recently edited. */
+        /** The checklist on show: a pinned one first, otherwise the most recently edited. Locked notes stay off the widget. */
         private suspend fun pickNote(context: Context): Note? =
             NotesDb.get(context).dao().allNotes()
-                .filter { it.isChecklist && it.trashedAt == null && !it.archived }
+                .filter { it.isChecklist && it.trashedAt == null && !it.archived && !it.locked }
                 .sortedWith(compareByDescending<Note> { it.pinned }.thenByDescending { it.updatedAt })
                 .firstOrNull()
 
@@ -183,4 +183,3 @@ class ChecklistToggleReceiver : BroadcastReceiver() {
         }
     }
 }
-
