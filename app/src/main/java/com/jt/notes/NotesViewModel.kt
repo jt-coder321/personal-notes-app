@@ -7,7 +7,10 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jt.notes.data.Attachment
+import com.jt.notes.data.AudioClip
+import com.jt.notes.data.AudioClips
 import com.jt.notes.data.Backup
+import com.jt.notes.data.EvernoteImport
 import com.jt.notes.data.Images
 import com.jt.notes.data.KeepImport
 import com.jt.notes.data.Label
@@ -15,21 +18,28 @@ import com.jt.notes.data.Note
 import com.jt.notes.data.NoteExport
 import com.jt.notes.data.NoteLabel
 import com.jt.notes.data.NotesDb
+import com.jt.notes.data.PlaceReminder
+import com.jt.notes.data.Template
 import com.jt.notes.data.Version
+import com.jt.notes.data.Vault
 import com.jt.notes.data.WrongPasswordException
+import com.jt.notes.data.checklistBodyToText
 import com.jt.notes.data.clearChecks
 import com.jt.notes.data.isBlank
+import com.jt.notes.data.textToChecklistBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.time.LocalDate
 import java.util.UUID
 
 sealed interface Filter {
@@ -85,6 +95,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** A note the app should open next (from a share, the widget, or a reminder). */
     val pendingOpen = MutableStateFlow<Long?>(null)
 
+    /** The note whose editor should start recording as soon as it opens (voice-note shortcut). */
+    val autoRecordFor = MutableStateFlow<Long?>(null)
+
     val labels: StateFlow<List<Label>> =
         dao.observeLabels().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -93,6 +106,25 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     val attachments: StateFlow<List<Attachment>> =
         dao.observeAttachments().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val audioClips: StateFlow<List<AudioClip>> =
+        dao.observeAudioClips().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val templates: StateFlow<List<Template>> =
+        dao.observeTemplates().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val placeReminders: StateFlow<List<PlaceReminder>> =
+        dao.observePlaceReminders().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Every note, unfiltered: backlinks, the calendar and the widget picker read from here. */
+    val allNotes: StateFlow<List<Note>> =
+        dao.observeNotes().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Notes with a reminder still to come, soonest first. */
+    val reminders: StateFlow<List<Note>> =
+        dao.observeNotes()
+            .map { notes -> notes.filter { it.reminderAt != null && it.trashedAt == null }.sortedBy { it.reminderAt } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val allItems =
         combine(dao.observeNotes(), noteLabels, labels, attachments) { notes, links, labels, attachments ->
@@ -109,22 +141,27 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     val items: StateFlow<List<NoteItem>> =
-        combine(allItems, filter, query, sort) { all, filter, query, sort ->
+        combine(allItems, labels, filter, query, sort) { all, labels, filter, query, sort ->
             val q = query.trim()
             val shown = all.filter { item ->
                 val n = item.note
                 if (q.isNotEmpty()) {
-                    // Search looks through everything except the trash.
+                    // Search looks through everything except the trash. A locked
+                    // note only matches its title and labels, never its body.
                     n.trashedAt == null && (
                         n.title.contains(q, ignoreCase = true) ||
-                            n.body.contains(q, ignoreCase = true) ||
+                            (!n.locked && n.body.contains(q, ignoreCase = true)) ||
                             item.labels.any { it.name.contains(q, ignoreCase = true) }
                         )
                 } else when (filter) {
                     Filter.Notes -> !n.archived && n.trashedAt == null
                     Filter.Archive -> n.archived && n.trashedAt == null
                     Filter.Trash -> n.trashedAt != null
-                    is Filter.ByLabel -> n.trashedAt == null && item.labels.any { it.id == filter.labelId }
+                    // Filtering by a parent label includes notes labeled with any of its descendants.
+                    is Filter.ByLabel -> n.trashedAt == null && run {
+                        val wanted = LabelTree.descendantIds(labels, filter.labelId) + filter.labelId
+                        item.labels.any { it.id in wanted }
+                    }
                 }
             }
             when (sort) {
@@ -159,6 +196,26 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** The editor holds an older copy of the note, so it must not undo a drag. */
     private suspend fun keepPosition(note: Note): Note =
         dao.getNote(note.id)?.let { note.copy(position = it.position) } ?: note
+
+    /**
+     * The reminder's progress (the next ping, how many pings were sent, the
+     * current occurrence) is owned by the alarm receiver, not the editor: a
+     * ping that fires while the note is open must not be written back over by
+     * the editor's older copy. Reminder changes the person makes in the editor
+     * go through [saveReminderChange] instead.
+     */
+    private suspend fun keepReminderState(note: Note): Note =
+        dao.getNote(note.id)?.let {
+            note.copy(
+                reminderAt = it.reminderAt,
+                remindPings = it.remindPings,
+                remindGapMin = it.remindGapMin,
+                remindAlarm = it.remindAlarm,
+                remindDone = it.remindDone,
+                remindRepeat = it.remindRepeat,
+                remindAnchor = it.remindAnchor,
+            )
+        } ?: note
 
     /** Saves the order the notes were dragged into, and switches to "My order". */
     fun saveOrder(orderedIds: List<Long>) {
@@ -211,10 +268,43 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { pendingOpen.value = createNote(isChecklist, title, body) }
     }
 
+    /**
+     * Opens today's note, creating it when there is none. The title is the
+     * ISO date ("2026-11-16"), unambiguous in every locale. Manual only:
+     * nothing is created on launch.
+     */
+    fun openDailyNote() {
+        viewModelScope.launch {
+            val title = LocalDate.now().toString()
+            val existing = dao.allNotes()
+                .filter { it.title == title && it.trashedAt == null }
+                .maxByOrNull { it.updatedAt }
+            pendingOpen.value = existing?.id ?: createNote(isChecklist = false, title = title, body = "")
+        }
+    }
+
+    /** Creates a note and asks its editor to start recording right away. */
+    fun createVoiceNote() {
+        viewModelScope.launch {
+            val id = createNote(isChecklist = false)
+            autoRecordFor.value = id
+            pendingOpen.value = id
+        }
+    }
+
     suspend fun getNote(id: Long): Note? = writeLock.withLock { dao.getNote(id) }
 
-    /** Writes the note exactly as given. */
+    /** Writes the note exactly as given, except the drag order and reminder progress, which belong to others. */
     fun save(note: Note) {
+        viewModelScope.launch { writeLock.withLock { dao.updateNote(keepPosition(keepReminderState(note))) } }
+    }
+
+    /**
+     * Writes a reminder the person just set or cleared in the editor, including
+     * its repeat. Only the editor's reminder actions use this; every other
+     * save keeps the receiver's reminder progress.
+     */
+    fun saveReminderChange(note: Note) {
         viewModelScope.launch { writeLock.withLock { dao.updateNote(keepPosition(note)) } }
     }
 
@@ -226,10 +316,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     fun finishEditing(note: Note, original: Note? = null, offerUndo: Undo? = null) {
         viewModelScope.launch {
             writeLock.withLock {
-                if (note.isBlank() && dao.attachmentsFor(note.id).isEmpty()) {
+                if (note.isBlank() && dao.attachmentsFor(note.id).isEmpty() && dao.audioClipsFor(note.id).isEmpty()) {
                     dao.deleteNote(note.id)
                 } else {
-                    dao.updateNote(keepPosition(note))
+                    dao.updateNote(keepPosition(keepReminderState(note)))
                     if (original != null && !original.isBlank() &&
                         (original.title != note.title || original.body != note.body)
                     ) {
@@ -264,6 +354,8 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun trash(notes: List<Note>) {
         notes.forEach { Reminders.cancel(context, it.id) }
+        notes.forEach { PinnedNote.unpinIfPinned(context, it.id) }
+        viewModelScope.launch { notes.forEach { dao.deletePlaceReminder(it.id) } }
         bulkUpdate(notes, if (notes.size == 1) "Moved to Trash" else "${notes.size} notes moved to Trash") {
             it.copy(trashedAt = System.currentTimeMillis(), pinned = false)
         }
@@ -277,6 +369,72 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setPinned(notes: List<Note>, pinned: Boolean) = bulkUpdate(notes, null) { it.copy(pinned = pinned) }
+
+    /** Locks or unlocks one note, reading it fresh so no other change is lost. */
+    fun setNoteLocked(noteId: Long, locked: Boolean) {
+        viewModelScope.launch {
+            writeLock.withLock {
+                dao.getNote(noteId)?.let { dao.updateNote(it.copy(locked = locked)) }
+            }
+            if (locked) PinnedNote.unpinIfPinned(context, noteId)
+        }
+    }
+
+    /**
+     * Appends the source note's body to the target's, keeps the target's
+     * pre-merge text in version history, then trashes the source. Text
+     * targets join with a blank line; checklist targets join with a single
+     * line break, so no empty item appears. Mixing types converts: text
+     * lines become items in a checklist target, and checklist items lose
+     * their boxes in a text target.
+     */
+    fun mergeNotes(sourceId: Long, targetId: Long, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val message = try {
+                writeLock.withLock {
+                    val source = dao.getNote(sourceId) ?: error("That note is gone")
+                    val target = dao.getNote(targetId) ?: error("That note is gone")
+                    val now = System.currentTimeMillis()
+                    val incoming = when {
+                        source.body.isBlank() -> ""
+                        target.isChecklist && source.isChecklist -> source.body
+                        target.isChecklist -> textToChecklistBody(source.body)
+                        source.isChecklist -> checklistBodyToText(source.body)
+                        else -> source.body
+                    }
+                    val mixed = target.isChecklist != source.isChecklist && incoming.isNotBlank()
+                    val merged = when {
+                        incoming.isBlank() -> target.body
+                        target.body.isBlank() -> incoming
+                        target.isChecklist -> target.body.trimEnd() + "\n" + incoming
+                        else -> target.body.trimEnd() + "\n\n" + incoming
+                    }
+                    if (merged != target.body) {
+                        dao.insertVersion(
+                            Version(
+                                noteId = target.id,
+                                title = target.title,
+                                body = target.body,
+                                isChecklist = target.isChecklist,
+                                savedAt = target.updatedAt,
+                            ),
+                        )
+                        dao.trimVersions(target.id, VERSIONS_KEPT)
+                        dao.updateNote(target.copy(body = merged, updatedAt = now))
+                    }
+                    Reminders.cancel(context, source.id)
+                    dao.deletePlaceReminder(source.id)
+                    dao.updateNote(source.copy(trashedAt = now, pinned = false))
+                    PinnedNote.unpinIfPinned(context, source.id)
+                    val name = target.title.ifBlank { "Untitled note" }
+                    "Merged into \"$name\"" + if (mixed && !target.isChecklist) " (list items added as plain lines)" else ""
+                }
+            } catch (e: Exception) {
+                "Merge failed: ${e.message}"
+            }
+            onDone(message)
+        }
+    }
 
     fun restore(notes: List<Note>) = bulkUpdate(notes, null) { it.copy(trashedAt = null) }
 
@@ -321,6 +479,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                             pinned = false,
                             trashedAt = null,
                             reminderAt = null,
+                            remindDone = 0,
+                            remindRepeat = 0,
+                            remindAnchor = null,
                             createdAt = now,
                             updatedAt = now,
                         )
@@ -342,17 +503,83 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     // ----- reminders -----
 
-    /** Opening a reminder notification counts as seeing it, so the remaining pings stop. */
+    /**
+     * Opening a reminder notification counts as seeing it, so the remaining
+     * pings stop. A repeating reminder moves on to its next occurrence
+     * instead of ending.
+     */
     fun acknowledgeReminder(noteId: Long) {
         viewModelScope.launch {
             Reminders.cancel(context, noteId)
-            dao.setReminderState(noteId, null, 0)
+            val note = dao.getNote(noteId)
+            val anchor = note?.remindAnchor ?: note?.reminderAt
+            val occurrence = if (note != null && anchor != null) {
+                ReminderPlan.nextOccurrence(anchor, note.remindRepeat, System.currentTimeMillis())
+            } else null
+            if (occurrence != null) {
+                dao.setReminderSeries(noteId, occurrence, 0, occurrence)
+                Reminders.schedule(context, noteId, occurrence)
+            } else {
+                dao.clearReminderFull(noteId)
+            }
+        }
+    }
+
+    /** Clears a reminder entirely, including its repeat chain and any place reminder. */
+    fun clearReminder(noteId: Long) {
+        viewModelScope.launch {
+            Reminders.cancel(context, noteId)
+            dao.clearReminderFull(noteId)
+            dao.deletePlaceReminder(noteId)
+            Reminders.dismiss(context, noteId)
         }
     }
 
     fun setReminder(noteId: Long, at: Long?) {
         if (at == null) Reminders.cancel(context, noteId) else Reminders.schedule(context, noteId, at)
     }
+
+    // ----- templates -----
+
+    fun saveTemplate(title: String, body: String, isChecklist: Boolean) = viewModelScope.launch {
+        val fallback = body.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        dao.insertTemplate(
+            Template(
+                title = title.ifBlank { fallback }.ifBlank { "Untitled template" },
+                body = body,
+                isChecklist = isChecklist,
+                createdAt = System.currentTimeMillis(),
+            )
+        )
+    }
+
+    fun deleteTemplate(template: Template) = viewModelScope.launch { dao.deleteTemplate(template) }
+
+    /** Creates a new note from a template and opens it. Checklist templates start unchecked. */
+    fun applyTemplate(template: Template) {
+        val body = if (template.isChecklist) clearChecks(template.body) else template.body
+        createAndOpen(template.isChecklist, template.title, body)
+    }
+
+    // ----- place reminders -----
+
+    /** Saves (or replaces) the note's place reminder and makes sure the checker is running. */
+    fun savePlaceReminder(noteId: Long, latitude: Double, longitude: Double, radiusM: Int, trigger: Int) {
+        viewModelScope.launch {
+            dao.insertPlaceReminder(
+                PlaceReminder(
+                    noteId = noteId,
+                    latitude = latitude,
+                    longitude = longitude,
+                    radiusM = radiusM,
+                    trigger = trigger,
+                )
+            )
+            PlaceReminders.scheduleWorker(context)
+        }
+    }
+
+    fun clearPlaceReminder(noteId: Long) = viewModelScope.launch { dao.deletePlaceReminder(noteId) }
 
     // ----- pictures -----
 
@@ -382,6 +609,28 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ----- voice notes -----
+
+    fun addAudioClip(noteId: Long, fileName: String, durationMs: Long) {
+        viewModelScope.launch {
+            dao.insertAudioClip(
+                AudioClip(
+                    noteId = noteId,
+                    fileName = fileName,
+                    durationMs = durationMs,
+                    createdAt = System.currentTimeMillis(),
+                )
+            )
+        }
+    }
+
+    fun removeAudioClip(clip: AudioClip) {
+        viewModelScope.launch {
+            dao.deleteAudioClip(clip.id)
+            withContext(Dispatchers.IO) { AudioClips.file(context, clip.fileName).delete() }
+        }
+    }
+
     // ----- labels -----
 
     fun addLabel(name: String, attachToNoteId: Long? = null) {
@@ -401,7 +650,17 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteLabel(label: Label) {
         if (filter.value == Filter.ByLabel(label.id)) filter.value = Filter.Notes
-        viewModelScope.launch { dao.deleteLabel(label) }
+        viewModelScope.launch {
+            // Children of a deleted label move to the top level instead of vanishing.
+            dao.clearChildrenParent(label.id)
+            dao.deleteLabel(label)
+        }
+    }
+
+    /** Moves a label under a new parent (or to the top level). Cycles are refused. */
+    fun setLabelParent(label: Label, parentId: Long?) {
+        if (!LabelTree.canParent(labels.value, label.id, parentId)) return
+        viewModelScope.launch { dao.updateLabel(label.copy(parentId = parentId)) }
     }
 
     fun setNoteLabel(noteId: Long, labelId: Long, on: Boolean) {
@@ -496,6 +755,47 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun exportVault(uri: Uri, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val message = try {
+                val result = withContext(Dispatchers.IO) { Vault.export(context, db, uri) }
+                "Exported ${result.written} notes as Markdown" +
+                    if (result.imagesSkipped > 0) " (${result.imagesSkipped} pictures were skipped)" else ""
+            } catch (e: Exception) {
+                "Export failed: ${e.message}"
+            }
+            onDone(message)
+        }
+    }
+
+    fun importVault(uri: Uri, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val message = try {
+                val result = withContext(Dispatchers.IO) { Vault.import(context, db, uri) }
+                "Imported ${result.added} notes from Markdown" +
+                    if (result.failed > 0) " (${result.failed} files could not be read)" else ""
+            } catch (e: Exception) {
+                "Import failed: ${e.message}"
+            }
+            onDone(message)
+        }
+    }
+
+    fun importEvernote(uri: Uri, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val message = try {
+                val count = withContext(Dispatchers.IO) {
+                    val input = context.contentResolver.openInputStream(uri) ?: error("could not open the file")
+                    input.use { EvernoteImport.import(db, it).added }
+                }
+                "Imported $count notes from Evernote"
+            } catch (e: Exception) {
+                "Import failed: ${e.message}"
+            }
+            onDone(message)
+        }
+    }
+
     fun exportPdf(note: Note, uri: Uri, onDone: (String) -> Unit) {
         viewModelScope.launch {
             val message = try {
@@ -536,3 +836,4 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         autoBackupFolder.value = uri?.toString()
     }
 }
+

@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -49,7 +50,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,8 +64,12 @@ import com.jt.notes.MainActivity
 import com.jt.notes.NoteItem
 import com.jt.notes.NotesViewModel
 import com.jt.notes.Sort
+import com.jt.notes.data.LinkPreview
+import com.jt.notes.data.LinkPreviews
+import com.jt.notes.data.UpdateCheck
 import com.jt.notes.data.parseItems
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -87,26 +94,69 @@ fun HomeScreen(
     val lockOn by vm.lockEnabled.collectAsStateWithLifecycle()
     val autoFolder by vm.autoBackupFolder.collectAsStateWithLifecycle()
     val undo by vm.undo.collectAsStateWithLifecycle()
+    val reminders by vm.reminders.collectAsStateWithLifecycle()
+    val templates by vm.templates.collectAsStateWithLifecycle()
+    val allNotes by vm.allNotes.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     var searching by rememberSaveable { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    var expandedMenuGroup by remember { mutableStateOf<String?>(null) }
     var showManageLabels by remember { mutableStateOf(false) }
     var confirmEmptyTrash by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showAutoBackupDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
+    var showReminders by remember { mutableStateOf(false) }
+    var showTemplates by remember { mutableStateOf(false) }
+    var showCalendar by remember { mutableStateOf(false) }
+    // Self-updates: the release on offer, while its APK downloads, and while a check runs.
+    var updateOffer by remember { mutableStateOf<UpdateCheck.Update?>(null) }
+    var updateDownloading by remember { mutableStateOf(false) }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    val updateScope = rememberCoroutineScope()
     val themeId by vm.theme.collectAsStateWithLifecycle()
     var exportPassword by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf(setOf<Long>()) }
     // Set while the person is dragging notes around: the order being shown.
     var arrangeList by remember { mutableStateOf<List<NoteItem>?>(null) }
     LaunchedEffect(filter, query) { arrangeList = null }
+    // "Select notes" in the menu: taps pick notes for bulk actions. It ends when the picks are cleared.
+    var selectMode by remember { mutableStateOf(false) }
+    var pickedAny by remember { mutableStateOf(false) }
+    LaunchedEffect(selection) {
+        if (selection.isNotEmpty()) pickedAny = true
+        else if (pickedAny) { pickedAny = false; selectMode = false }
+    }
+    LaunchedEffect(filter, query) { selectMode = false }
 
     fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 
+    // A check the person asked for always says what it found; the launch check stays silent.
+    fun checkForUpdates(manual: Boolean) {
+        if (checkingUpdate) return
+        checkingUpdate = true
+        updateScope.launch {
+            try {
+                if (manual) {
+                    when (val result = UpdateCheck.manualCheck(context)) {
+                        is UpdateCheck.ManualResult.Available -> updateOffer = result.update
+                        UpdateCheck.ManualResult.UpToDate -> toast("You're up to date")
+                        UpdateCheck.ManualResult.Failed ->
+                            toast("Couldn't check for updates. Check your connection and try again.")
+                    }
+                } else {
+                    UpdateCheck.autoCheck(context)?.let { updateOffer = it }
+                }
+            } finally {
+                checkingUpdate = false
+            }
+        }
+    }
+
     LaunchedEffect(Unit) { vm.refreshLastBackup() }
+    LaunchedEffect(Unit) { checkForUpdates(manual = false) }
 
     // Undo stays on offer for a few seconds.
     val undoId = undo?.id
@@ -134,6 +184,18 @@ fun HomeScreen(
     val keepLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri -> if (uri != null) vm.importKeep(uri) { toast(it) } }
+
+    val vaultExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri -> if (uri != null) vm.exportVault(uri) { toast(it) } }
+
+    val vaultImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri -> if (uri != null) vm.importVault(uri) { toast(it) } }
+
+    val enexLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) vm.importEvernote(uri) { toast(it) } }
 
     val folderLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -257,54 +319,113 @@ fun HomeScreen(
                                 Icon(Icons.Outlined.MoreHoriz, contentDescription = "More")
                             }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                                MenuRow(
-                                    if (grid) "Show as list" else "Show as grid",
-                                    if (grid) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
-                                ) { menuOpen = false; vm.setGridView(!grid) }
-                                Sort.entries.forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text("Sort: ${option.label}") },
-                                        leadingIcon = { Icon(Icons.Outlined.SwapVert, contentDescription = null) },
-                                        trailingIcon = {
-                                            if (sort == option) Icon(Icons.Outlined.Check, contentDescription = "Selected")
-                                        },
-                                        onClick = { menuOpen = false; vm.setSort(option) },
-                                    )
-                                }
-                                if (!inTrash && query.isEmpty() && notes.isNotEmpty()) {
-                                    MenuRow("Arrange notes", Icons.Outlined.DragIndicator) {
-                                        menuOpen = false
-                                        selection = emptySet()
-                                        arrangeList = notes
+                                MenuGroupHeader(
+                                    text = "Sort by",
+                                    icon = Icons.Outlined.SwapVert,
+                                    expanded = expandedMenuGroup == "sort",
+                                    onClick = { expandedMenuGroup = if (expandedMenuGroup == "sort") null else "sort" },
+                                )
+                                if (expandedMenuGroup == "sort") {
+                                    Sort.entries.forEach { option ->
+                                        DropdownMenuItem(
+                                            text = { Text(option.label) },
+                                            leadingIcon = { Icon(Icons.Outlined.SwapVert, contentDescription = null) },
+                                            trailingIcon = {
+                                                if (sort == option) Icon(Icons.Outlined.Check, contentDescription = "Selected")
+                                            },
+                                            onClick = { menuOpen = false; vm.setSort(option) },
+                                        )
                                     }
                                 }
                                 HorizontalDivider()
-                                MenuRow("Edit labels", Icons.Outlined.Edit) { menuOpen = false; showManageLabels = true }
-                                MenuRow("Back up to a file", Icons.Outlined.CloudUpload) {
-                                    menuOpen = false; showBackupDialog = true
+                                MenuGroupHeader(
+                                    text = "View",
+                                    icon = if (grid) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
+                                    expanded = expandedMenuGroup == "view",
+                                    onClick = { expandedMenuGroup = if (expandedMenuGroup == "view") null else "view" },
+                                )
+                                if (expandedMenuGroup == "view") {
+                                    MenuRow(
+                                        if (grid) "Show as list" else "Show as grid",
+                                        if (grid) Icons.Outlined.ViewAgenda else Icons.Outlined.GridView,
+                                    ) { menuOpen = false; vm.setGridView(!grid) }
+                                    if (notes.isNotEmpty()) {
+                                        MenuRow("Select notes", Icons.Outlined.Check) {
+                                            menuOpen = false
+                                            arrangeList = null
+                                            selectMode = true
+                                        }
+                                    }
+                                    MenuRow("Reminders", Icons.Outlined.Alarm) {
+                                        menuOpen = false; showReminders = true
+                                    }
+                                    MenuRow("Calendar", Icons.Outlined.CalendarMonth) {
+                                        menuOpen = false; showCalendar = true
+                                    }
+                                    MenuRow("Today's note", Icons.Outlined.Today) {
+                                        menuOpen = false; vm.openDailyNote()
+                                    }
                                 }
-                                MenuRow("Restore from a file", Icons.Outlined.CloudDownload) {
-                                    menuOpen = false; importLauncher.launch(arrayOf("*/*"))
+                                HorizontalDivider()
+                                MenuGroupHeader(
+                                    text = "Organize",
+                                    icon = Icons.Outlined.Edit,
+                                    expanded = expandedMenuGroup == "organize",
+                                    onClick = { expandedMenuGroup = if (expandedMenuGroup == "organize") null else "organize" },
+                                )
+                                if (expandedMenuGroup == "organize") {
+                                    MenuRow("Edit labels", Icons.Outlined.Edit) { menuOpen = false; showManageLabels = true }
+                                    MenuRow("Templates", Icons.Outlined.Description) { menuOpen = false; showTemplates = true }
+                                    MenuRow("Theme", Icons.Outlined.Palette) { menuOpen = false; showThemeDialog = true }
                                 }
-                                MenuRow(
-                                    if (autoFolder == null) "Automatic backup: off" else "Automatic backup: on",
-                                    Icons.Outlined.Schedule,
-                                ) {
-                                    menuOpen = false
-                                    if (autoFolder == null) folderLauncher.launch(null) else showAutoBackupDialog = true
+                                HorizontalDivider()
+                                MenuGroupHeader(
+                                    text = "Backup & import",
+                                    icon = Icons.Outlined.CloudUpload,
+                                    expanded = expandedMenuGroup == "backup",
+                                    onClick = { expandedMenuGroup = if (expandedMenuGroup == "backup") null else "backup" },
+                                )
+                                if (expandedMenuGroup == "backup") {
+                                    MenuRow("Back up to a file", Icons.Outlined.CloudUpload) {
+                                        menuOpen = false; showBackupDialog = true
+                                    }
+                                    MenuRow("Restore from a file", Icons.Outlined.CloudDownload) {
+                                        menuOpen = false; importLauncher.launch(arrayOf("*/*"))
+                                    }
+                                    MenuRow(
+                                        if (autoFolder == null) "Automatic backup: off" else "Automatic backup: on",
+                                        Icons.Outlined.Schedule,
+                                    ) {
+                                        menuOpen = false
+                                        if (autoFolder == null) folderLauncher.launch(null) else showAutoBackupDialog = true
+                                    }
+                                    MenuRow("Import from Google Keep", Icons.Outlined.FileDownload) {
+                                        menuOpen = false
+                                        toast("Pick the Google Takeout zip that contains your Keep notes")
+                                        keepLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
+                                    }
+                                    MenuRow("Export as Markdown vault", Icons.Outlined.Description) {
+                                        menuOpen = false
+                                        toast("Pick a folder for one .md file per note")
+                                        vaultExportLauncher.launch(null)
+                                    }
+                                    MenuRow("Import Markdown or Obsidian vault", Icons.Outlined.FileDownload) {
+                                        menuOpen = false
+                                        toast("Pick the folder with the .md files")
+                                        vaultImportLauncher.launch(null)
+                                    }
+                                    MenuRow("Import from Evernote (.enex)", Icons.Outlined.NoteAdd) {
+                                        menuOpen = false
+                                        toast("Pick the .enex file exported from Evernote")
+                                        enexLauncher.launch(arrayOf("application/xml", "text/xml", "*/*"))
+                                    }
                                 }
-                                MenuRow("Import from Google Keep", Icons.Outlined.FileDownload) {
-                                    menuOpen = false
-                                    toast("Pick the Google Takeout zip that contains your Keep notes")
-                                    keepLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
-                                }
+                                HorizontalDivider()
                                 MenuRow(if (lockOn) "App lock: on" else "App lock: off", Icons.Outlined.Lock) {
                                     menuOpen = false; toggleLock()
                                 }
-                                HorizontalDivider()
                                 MenuRow("Trash", Icons.Outlined.Delete) { menuOpen = false; vm.filter.value = Filter.Trash }
-                                MenuRow("Theme", Icons.Outlined.Palette) { menuOpen = false; showThemeDialog = true }
-                                MenuRow("Version " + appVersion(), Icons.Outlined.Info) { menuOpen = false }
+                                MenuRow("Version " + appVersion(), Icons.Outlined.Info) { menuOpen = false; checkForUpdates(manual = true) }
                             }
                         }
                     }
@@ -326,7 +447,7 @@ fun HomeScreen(
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 16.dp),
+                    modifier = Modifier.padding(top = 16.dp, bottom = 12.dp),
                 ) {
                     item(key = "all") {
                         FilterChipPill("All", filter == Filter.Notes) { vm.filter.value = Filter.Notes }
@@ -343,29 +464,41 @@ fun HomeScreen(
 
                 val shownNotes = arrangeList ?: notes
                 val arranging = arrangeList != null
+                // Holding a note starts arranging, except in the Trash, in search, or while notes are selected.
+                val canReorder = arranging || (!inTrash && query.isEmpty() && !selecting && !selectMode)
                 val pinned = if (inTrash) emptyList() else shownNotes.filter { it.note.pinned }
                 val others = if (inTrash) shownNotes else shownNotes.filter { !it.note.pinned }
 
                 val onCardClick: (NoteItem) -> Unit = { item ->
-                    if (selecting || item.note.trashedAt != null) toggle(item.note.id) else onOpen(item.note.id)
+                    if (selectMode || selecting || item.note.trashedAt != null) toggle(item.note.id) else onOpen(item.note.id)
                 }
 
-                if (arranging) {
+                if (arranging || (selectMode && !selecting)) {
                     Surface(
                         color = p.accent.copy(alpha = 0.14f),
                         contentColor = p.ink,
-                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                     ) {
                         Row(
-                            Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                            Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            Icon(
+                                if (arranging) Icons.Outlined.DragIndicator else Icons.Outlined.Check,
+                                contentDescription = null,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
                             Text(
-                                "Press and hold a note, then drag it where you want. Your order is saved.",
+                                if (arranging) "Drag a note where you want it. Your order is saved." else "Tap the notes you want to select.",
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.weight(1f),
                             )
-                            TextButton(onClick = { arrangeList = null }) { Text("Done") }
+                            TextButton(onClick = { if (arranging) arrangeList = null else selectMode = false }) {
+                                Text(if (arranging) "Done" else "Cancel")
+                            }
                         }
                     }
                 }
@@ -425,19 +558,33 @@ fun HomeScreen(
                                 SectionHeader("Pinned", showPin = true)
                             }
                             gridItems(pinned, key = { it.note.id }) { item ->
-                                ReorderableItem(reorderState, key = item.note.id, enabled = arranging) { isDragging ->
+                                ReorderableItem(reorderState, key = item.note.id, enabled = canReorder) { isDragging ->
                                     NoteCard(
                                         item = item,
                                         open = item.note.id == selectedId,
                                         checked = item.note.id in selection,
                                         onClick = { onCardClick(item) },
-                                        onLongClick = { toggle(item.note.id) },
+                                        onLongClick = {
+                                            if (canReorder) {
+                                                if (arrangeList == null) {
+                                                    arrangeList = notes
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                }
+                                            } else toggle(item.note.id)
+                                        },
+                                        jiggle = arranging,
                                         arrange = arranging,
                                         dragging = isDragging,
                                         handle = Modifier.longPressDraggableHandle(
-                                            enabled = arranging,
-                                            onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                                            onDragStopped = { arrangeList?.let { l -> vm.saveOrder(l.map { it.note.id }) } },
+                                            enabled = canReorder,
+                                            onDragStarted = {
+                                                if (arrangeList == null) arrangeList = notes
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            },
+                                            onDragStopped = {
+                                                val l = arrangeList
+                                                if (l != null && l.map { it.note.id } != notes.map { it.note.id }) vm.saveOrder(l.map { it.note.id })
+                                            },
                                         ),
                                     )
                                 }
@@ -449,19 +596,33 @@ fun HomeScreen(
                             }
                         }
                         gridItems(others, key = { it.note.id }) { item ->
-                            ReorderableItem(reorderState, key = item.note.id, enabled = arranging) { isDragging ->
+                            ReorderableItem(reorderState, key = item.note.id, enabled = canReorder) { isDragging ->
                                 NoteCard(
                                     item = item,
                                     open = item.note.id == selectedId,
                                     checked = item.note.id in selection,
                                     onClick = { onCardClick(item) },
-                                    onLongClick = { toggle(item.note.id) },
+                                    onLongClick = {
+                                        if (canReorder) {
+                                            if (arrangeList == null) {
+                                                arrangeList = notes
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            }
+                                        } else toggle(item.note.id)
+                                    },
+                                    jiggle = arranging,
                                     arrange = arranging,
                                     dragging = isDragging,
                                     handle = Modifier.longPressDraggableHandle(
-                                        enabled = arranging,
-                                        onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                                        onDragStopped = { arrangeList?.let { l -> vm.saveOrder(l.map { it.note.id }) } },
+                                        enabled = canReorder,
+                                        onDragStarted = {
+                                            if (arrangeList == null) arrangeList = notes
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        },
+                                        onDragStopped = {
+                                            val l = arrangeList
+                                            if (l != null && l.map { it.note.id } != notes.map { it.note.id }) vm.saveOrder(l.map { it.note.id })
+                                        },
                                     ),
                                 )
                             }
@@ -494,6 +655,29 @@ fun HomeScreen(
 
     if (showManageLabels) {
         ManageLabelsDialog(vm = vm, labels = labels, onDismiss = { showManageLabels = false })
+    }
+    if (showReminders) {
+        RemindersListDialog(
+            notes = reminders,
+            onOpen = { id -> showReminders = false; onOpen(id) },
+            onClear = { id -> vm.clearReminder(id) },
+            onDismiss = { showReminders = false },
+        )
+    }
+    if (showTemplates) {
+        TemplatesDialog(
+            templates = templates,
+            onApply = { template -> showTemplates = false; vm.applyTemplate(template) },
+            onDelete = { template -> vm.deleteTemplate(template) },
+            onDismiss = { showTemplates = false },
+        )
+    }
+    if (showCalendar) {
+        CalendarDialog(
+            notes = allNotes,
+            onOpen = { id -> showCalendar = false; onOpen(id) },
+            onDismiss = { showCalendar = false },
+        )
     }
     if (showBackupDialog) {
         BackupDialog(
@@ -595,6 +779,33 @@ fun HomeScreen(
             dismissButton = { TextButton(onClick = { confirmEmptyTrash = false }) { Text("Cancel") } },
         )
     }
+    updateOffer?.let { update ->
+        UpdateAvailableDialog(
+            version = update.version,
+            downloading = updateDownloading,
+            onDownload = {
+                if (!updateDownloading) {
+                    updateDownloading = true
+                    updateScope.launch {
+                        val file = UpdateCheck.download(context, update)
+                        updateDownloading = false
+                        if (file != null) {
+                            updateOffer = null
+                            if (!UpdateCheck.install(context, file)) {
+                                toast("Couldn't open the installer.")
+                            }
+                        } else {
+                            toast("Download failed. Try again later.")
+                        }
+                    }
+                }
+            },
+            onDismiss = {
+                UpdateCheck.dismissVersion(context, update.version)
+                updateOffer = null
+            },
+        )
+    }
 }
 
 @Composable
@@ -602,6 +813,26 @@ private fun MenuRow(text: String, icon: ImageVector, onClick: () -> Unit) {
     DropdownMenuItem(
         text = { Text(text) },
         leadingIcon = { Icon(icon, contentDescription = null) },
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun MenuGroupHeader(
+    text: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(text, fontWeight = FontWeight.SemiBold) },
+        leadingIcon = { Icon(icon, contentDescription = null) },
+        trailingIcon = {
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+            )
+        },
         onClick = onClick,
     )
 }
@@ -841,7 +1072,7 @@ private fun rememberWiggle(active: Boolean, seed: Long): State<Float> =
             initialValue = -1.3f,
             targetValue = 1.3f,
             animationSpec = infiniteRepeatable(
-                tween(durationMillis = 105 + (seed % 5).toInt() * 14, easing = LinearEasing),
+                tween(durationMillis = 170 + (seed % 5).toInt() * 20, easing = LinearEasing),
                 RepeatMode.Reverse,
             ),
             label = "angle",
@@ -857,6 +1088,7 @@ private fun NoteCard(
     checked: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    jiggle: Boolean = false,
     arrange: Boolean = false,
     dragging: Boolean = false,
     handle: Modifier = Modifier,
@@ -864,9 +1096,16 @@ private fun NoteCard(
     val p = LocalPalette.current
     val note = item.note
     val background = noteBackground(note.color)
+    // The first URL's preview, fetched once per body. Locked notes fetch nothing.
+    val firstUrl = remember(note.body, note.locked) {
+        if (note.locked) null else LinkPreviews.firstUrl(note.body)
+    }
+    val preview by produceState<LinkPreview?>(initialValue = null, firstUrl) {
+        value = firstUrl?.let { LinkPreviews.fetch(it) }
+    }
     val shape = RoundedCornerShape(p.cardRadius)
     // While arranging, every note jiggles like icons on a home screen, except the one being dragged.
-    val wiggle = rememberWiggle(active = arrange && !dragging, seed = note.id)
+    val wiggle = rememberWiggle(active = jiggle && !dragging, seed = note.id)
     val border = when {
         dragging -> BorderStroke(3.dp, p.accent)
         checked -> BorderStroke(3.dp, p.ink)
@@ -894,12 +1133,29 @@ private fun NoteCard(
             .then(if (arrange) handle else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
     ) {
         Column {
-            item.images.firstOrNull()?.let { name ->
-                NoteImage(name = name, maxPx = 480, modifier = Modifier.fillMaxWidth().height(120.dp))
+            // A locked note shows no picture and no preview: title and lock only.
+            if (!note.locked) {
+                item.images.firstOrNull()?.let { name ->
+                    NoteImage(name = name, maxPx = 480, modifier = Modifier.fillMaxWidth().height(120.dp))
+                }
             }
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val soft = p.ink.copy(alpha = 0.78f)
-                if (note.isChecklist) {
+                if (note.locked) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(Icons.Outlined.Lock, contentDescription = "Locked note", modifier = Modifier.size(18.dp))
+                        Text(
+                            note.title.ifBlank { "Locked note" },
+                            fontFamily = Display,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 17.sp,
+                            lineHeight = 22.sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                } else if (note.isChecklist) {
                     val all = remember(note.body) { parseItems(note.body).filter { it.text.isNotBlank() } }
                     val openItems = all.filter { !it.checked }
                     val done = all.size - openItems.size
@@ -966,8 +1222,9 @@ private fun NoteCard(
                         )
                     }
                 }
+                preview?.let { LinkPreviewRow(it) }
                 val reminder = note.reminderAt
-                if (reminder != null) {
+                if (reminder != null && !note.locked) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -976,7 +1233,7 @@ private fun NoteCard(
                         Text(formatReminder(reminder), style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                if (item.labels.isNotEmpty()) {
+                if (!note.locked && item.labels.isNotEmpty()) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -991,6 +1248,36 @@ private fun NoteCard(
 
 fun formatReminder(at: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(at))
+
+/** The fetched title and image for the first URL in a note, shown under the card text. */
+@Composable
+private fun LinkPreviewRow(preview: LinkPreview) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(LocalContentColor.current.copy(alpha = 0.06f))
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        preview.image?.let { bitmap ->
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
+            )
+        }
+        Text(
+            preview.title,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
 
 /** A thin bar showing how much of a checklist is done. */
 @Composable
@@ -1032,3 +1319,7 @@ private fun appVersion(): String {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
 }
+
+
+
+

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg_card"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:id="@+id/check_header"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/check_title"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="center_vertical"
+            android:maxLines="1"
+            android:paddingStart="8dp"
+            android:text="Checklist"
+            android:textColor="#C9CED8"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/check_add"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="@drawable/widget_accent_circle"
+            android:contentDescription="@string/widget_new_checklist"
+            android:padding="8dp"
+            android:src="@drawable/ic_widget_add" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/check_empty"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:text="@string/widget_checklist_empty"
+        android:textColor="#C9CED8"
+        android:textSize="15sp" />
+    <TextView
+        android:id="@+id/check_1"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp" />
+    <TextView
+        android:id="@+id/check_2"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp" />
+    <TextView
+        android:id="@+id/check_3"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp" />
+    <TextView
+        android:id="@+id/check_4"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp" />
+    <TextView
+        android:id="@+id/check_5"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp" />
+    <TextView
+        android:id="@+id/check_6"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp" />
+    <TextView
+        android:id="@+id/check_more"
+        android:layout_width="match_parent"
+        android:layout_height="32dp"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:textColor="#C9CED8"
+        android:textSize="14sp" />
+</LinearLayout>

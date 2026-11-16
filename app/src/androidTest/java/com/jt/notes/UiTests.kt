@@ -105,10 +105,14 @@ class UiTests {
     }
 
     @Test
-    fun longPress_selectsANote_andArchivesIt() {
+    fun selectFromMenu_selectsANote_andArchivesIt() {
         val title = unique("Archive note")
         createTextNote(title, "Bulk action")
-        rule.onNodeWithText(title).performTouchInput { longClick() }
+        rule.onNodeWithContentDescription("More").performClick()
+        // The menu groups its rows: "Select notes" lives inside the View group.
+        rule.onNodeWithText("View").performClick()
+        rule.onNodeWithText("Select notes").performClick()
+        rule.onNodeWithText(title).performClick()
         waitForText("1 selected")
         rule.onNodeWithContentDescription("Archive").performClick()
         waitForTextGone(title)
@@ -116,4 +120,15 @@ class UiTests {
         rule.onNodeWithText("Archive").performClick()
         waitForText(title)
     }
+
+    @Test
+    fun holdingANote_startsArranging() {
+        val title = unique("Arrange note")
+        createTextNote(title, "Move me")
+        rule.onNodeWithText(title).performTouchInput { longClick() }
+        waitForText("Drag a note where you want it. Your order is saved.")
+        rule.onNodeWithText("Done").performClick()
+        waitForTextGone("Drag a note where you want it. Your order is saved.")
+    }
 }
+

@@ -46,14 +46,22 @@ data class Note(
     @ColumnInfo(defaultValue = "0") val remindAlarm: Boolean = false,
     /** Pings already sent in the current series. */
     @ColumnInfo(defaultValue = "0") val remindDone: Int = 0,
+    /** Repeat for the reminder: 0 = once, 1 = daily, 2 = weekly. See ReminderPlan. */
+    @ColumnInfo(defaultValue = "0") val remindRepeat: Int = 0,
+    /** The time the current reminder occurrence was picked for. Pings move reminderAt forward; this stays put, so repeats land on the same time of day and editing pre-fills the original pick. */
+    val remindAnchor: Long? = null,
     /** Place in "My order". Bigger comes first. New notes start at the top. */
     @ColumnInfo(defaultValue = "0") val position: Long = System.currentTimeMillis(),
+    /** True when the note needs a biometric check before it can be read. */
+    @ColumnInfo(defaultValue = "0") val locked: Boolean = false,
 )
 
 @Entity(tableName = "labels", indices = [Index(value = ["name"], unique = true)])
 data class Label(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
+    /** The parent label, for nesting. Null means top level. */
+    val parentId: Long? = null,
 )
 
 @Entity(
@@ -97,6 +105,65 @@ data class Attachment(
     val createdAt: Long,
 )
 
+/** A voice recording attached to a note. The file lives in the app's private audio folder. */
+@Entity(
+    tableName = "audio_clips",
+    foreignKeys = [
+        ForeignKey(
+            entity = Note::class,
+            parentColumns = ["id"],
+            childColumns = ["noteId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("noteId")],
+)
+data class AudioClip(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val noteId: Long,
+    val fileName: String,
+    val durationMs: Long,
+    val createdAt: Long,
+)
+
+/** A saved starter for new notes: title, body and checklist state, reused as-is. */
+@Entity(tableName = "templates")
+data class Template(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val body: String,
+    val isChecklist: Boolean = false,
+    val createdAt: Long,
+)
+
+/** A reminder that fires when the phone arrives at, or leaves, a place. One per note. */
+@Entity(
+    tableName = "place_reminders",
+    foreignKeys = [
+        ForeignKey(
+            entity = Note::class,
+            parentColumns = ["id"],
+            childColumns = ["noteId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["noteId"], unique = true)],
+)
+data class PlaceReminder(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val noteId: Long,
+    val latitude: Double,
+    val longitude: Double,
+    /** Radius in metres around the place. */
+    val radiusM: Int,
+    /** 0 = fire on arriving, 1 = fire on leaving. See PlaceReminders. */
+    val trigger: Int,
+    /** True once it has fired; a place reminder fires once. */
+    @ColumnInfo(defaultValue = "0") val fired: Boolean = false,
+    /** Whether the phone was inside the radius at the last check. Null until the first check. */
+    val lastInside: Boolean? = null,
+)
+
 /** An earlier state of a note's text, kept so it can be brought back. */
 @Entity(
     tableName = "versions",
@@ -133,6 +200,15 @@ interface NotesDao {
     @Query("SELECT * FROM attachments ORDER BY createdAt")
     fun observeAttachments(): Flow<List<Attachment>>
 
+    @Query("SELECT * FROM audio_clips ORDER BY createdAt")
+    fun observeAudioClips(): Flow<List<AudioClip>>
+
+    @Query("SELECT * FROM templates ORDER BY title COLLATE NOCASE")
+    fun observeTemplates(): Flow<List<Template>>
+
+    @Query("SELECT * FROM place_reminders")
+    fun observePlaceReminders(): Flow<List<PlaceReminder>>
+
     @Query("SELECT * FROM notes")
     suspend fun allNotes(): List<Note>
 
@@ -160,6 +236,14 @@ interface NotesDao {
     @Query("UPDATE notes SET reminderAt = :at, remindDone = :done WHERE id = :id")
     suspend fun setReminderState(id: Long, at: Long?, done: Int)
 
+    /** Moves a repeating reminder to its next occurrence, which becomes the new anchor. */
+    @Query("UPDATE notes SET reminderAt = :at, remindDone = :done, remindAnchor = :anchor WHERE id = :id")
+    suspend fun setReminderSeries(id: Long, at: Long?, done: Int, anchor: Long?)
+
+    /** Clears a reminder entirely, including its repeat chain. */
+    @Query("UPDATE notes SET reminderAt = NULL, remindDone = 0, remindAnchor = NULL, remindRepeat = 0 WHERE id = :id")
+    suspend fun clearReminderFull(id: Long)
+
     @Insert
     suspend fun insertNote(note: Note): Long
 
@@ -177,7 +261,8 @@ interface NotesDao {
 
     @Query(
         "DELETE FROM notes WHERE trim(title) = '' AND (trim(body) = '' OR trim(body) = '[ ]') " +
-            "AND id NOT IN (SELECT noteId FROM attachments)"
+            "AND id NOT IN (SELECT noteId FROM attachments) " +
+            "AND id NOT IN (SELECT noteId FROM audio_clips)"
     )
     suspend fun deleteBlankNotes()
 
@@ -192,6 +277,34 @@ interface NotesDao {
 
     @Delete
     suspend fun deleteLabel(label: Label)
+
+    /** Moves a deleted label's children to the top level. */
+    @Query("UPDATE labels SET parentId = NULL WHERE parentId = :id")
+    suspend fun clearChildrenParent(id: Long)
+
+    @Query("SELECT * FROM templates ORDER BY title COLLATE NOCASE")
+    suspend fun allTemplates(): List<Template>
+
+    @Insert
+    suspend fun insertTemplate(template: Template): Long
+
+    @Delete
+    suspend fun deleteTemplate(template: Template)
+
+    @Query("SELECT * FROM place_reminders")
+    suspend fun allPlaceReminders(): List<PlaceReminder>
+
+    @Query("SELECT * FROM place_reminders WHERE noteId = :noteId")
+    suspend fun placeReminderFor(noteId: Long): PlaceReminder?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlaceReminder(reminder: PlaceReminder): Long
+
+    @Update
+    suspend fun updatePlaceReminder(reminder: PlaceReminder)
+
+    @Query("DELETE FROM place_reminders WHERE noteId = :noteId")
+    suspend fun deletePlaceReminder(noteId: Long)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun addNoteLabel(noteLabel: NoteLabel)
@@ -210,6 +323,15 @@ interface NotesDao {
 
     @Query("DELETE FROM attachments WHERE id = :id")
     suspend fun deleteAttachment(id: Long)
+
+    @Insert
+    suspend fun insertAudioClip(clip: AudioClip): Long
+
+    @Query("SELECT * FROM audio_clips WHERE noteId = :noteId ORDER BY createdAt")
+    suspend fun audioClipsFor(noteId: Long): List<AudioClip>
+
+    @Query("DELETE FROM audio_clips WHERE id = :id")
+    suspend fun deleteAudioClip(id: Long)
 
     @Insert
     suspend fun insertVersion(version: Version): Long
@@ -262,9 +384,51 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+/** Version 5 adds repeating reminders (a repeat setting plus the occurrence anchor) and voice recordings. */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindRepeat` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindAnchor` INTEGER")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `audio_clips` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`noteId` INTEGER NOT NULL, `fileName` TEXT NOT NULL, `durationMs` INTEGER NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "FOREIGN KEY(`noteId`) REFERENCES `notes`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_clips_noteId` ON `audio_clips` (`noteId`)")
+    }
+}
+
+/** Version 6 adds label nesting, saved templates, and place reminders. */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `labels` ADD COLUMN `parentId` INTEGER")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `templates` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`title` TEXT NOT NULL, `body` TEXT NOT NULL, `isChecklist` INTEGER NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `place_reminders` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`noteId` INTEGER NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, " +
+                "`radiusM` INTEGER NOT NULL, `trigger` INTEGER NOT NULL, `fired` INTEGER NOT NULL DEFAULT 0, " +
+                "`lastInside` INTEGER, " +
+                "FOREIGN KEY(`noteId`) REFERENCES `notes`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+        )
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_place_reminders_noteId` ON `place_reminders` (`noteId`)")
+    }
+}
+
+/** Version 7 adds the per-note lock. Existing notes start unlocked. */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `locked` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(
-    entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, Version::class],
-    version = 4,
+    entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, AudioClip::class, Version::class, Template::class, PlaceReminder::class],
+    version = 7,
     exportSchema = false,
 )
 abstract class NotesDb : RoomDatabase() {
@@ -276,9 +440,10 @@ abstract class NotesDb : RoomDatabase() {
 
         fun get(context: Context): NotesDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, NotesDb::class.java, "notes.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build()
                 .also { instance = it }
         }
     }
 }
+

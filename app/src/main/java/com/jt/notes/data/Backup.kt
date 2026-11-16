@@ -73,12 +73,15 @@ object Backup {
             o.put("color", n.color)
             o.put("pinned", n.pinned)
             o.put("archived", n.archived)
+            o.put("locked", n.locked)
             n.trashedAt?.let { o.put("trashedAt", it) }
             n.reminderAt?.let { o.put("reminderAt", it) }
             o.put("position", n.position)
             o.put("remindPings", n.remindPings)
             o.put("remindGapMin", n.remindGapMin)
             o.put("remindAlarm", n.remindAlarm)
+            o.put("remindRepeat", n.remindRepeat)
+            n.remindAnchor?.let { o.put("remindAnchor", it) }
             o.put("createdAt", n.createdAt)
             o.put("updatedAt", n.updatedAt)
             val names = JSONArray()
@@ -208,12 +211,15 @@ object Backup {
                     color = o.optInt("color"),
                     pinned = o.optBoolean("pinned"),
                     archived = o.optBoolean("archived"),
+                    locked = o.optBoolean("locked"),
                     trashedAt = if (o.has("trashedAt")) o.getLong("trashedAt") else null,
                     reminderAt = if (o.has("reminderAt")) o.getLong("reminderAt") else null,
                     position = o.optLong("position", o.optLong("updatedAt", System.currentTimeMillis())),
                     remindPings = o.optInt("remindPings", 1),
                     remindGapMin = o.optInt("remindGapMin", 5),
                     remindAlarm = o.optBoolean("remindAlarm", false),
+                    remindRepeat = o.optInt("remindRepeat", 0),
+                    remindAnchor = if (o.has("remindAnchor")) o.getLong("remindAnchor") else null,
                     createdAt = o.optLong("createdAt", System.currentTimeMillis()),
                     updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
                 )

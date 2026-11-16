@@ -1,4 +1,5 @@
 <resources>
     <style name="Theme.Notes" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.Notes.Dialog" parent="android:Theme.Material.Light.Dialog" />
     <color name="ic_launcher_bg">#F9C846</color>
 </resources>

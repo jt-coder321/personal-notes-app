@@ -35,6 +35,15 @@ object Images {
         return File(name).name
     }
 
+    /** Saves a sketch bitmap as a JPEG, so it renders like any other picture. Returns the file name, or null on failure. */
+    fun saveSketch(context: Context, bitmap: Bitmap): String? = try {
+        val name = newName()
+        file(context, name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+        name
+    } catch (e: Exception) {
+        null
+    }
+
     /** Loads a picture scaled down to roughly [maxPx] on its longer side, upright. */
     fun load(context: Context, name: String, maxPx: Int): Bitmap? {
         val key = "$name@$maxPx"
@@ -78,3 +87,4 @@ object Images {
         }
     }
 }
+

@@ -7,6 +7,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -27,7 +28,7 @@ import androidx.compose.ui.unit.sp
 private val BOLD = Regex("\\*\\*(.+?)\\*\\*")
 private val STRIKE = Regex("~~(.+?)~~")
 private val ITALIC = Regex("(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)")
-private val INLINE = Regex("\\*\\*(.+?)\\*\\*|~~(.+?)~~|(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)")
+private val INLINE = Regex("\\*\\*(.+?)\\*\\*|~~(.+?)~~|(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)|__(.+?)__|`([^`\\n]+?)`")
 private val LINE_PREFIX = Regex("^(## |# |- |> |\\d+\\. )")
 private val NUMBERED = Regex("^(\\d+)\\. ")
 
@@ -209,6 +210,11 @@ fun displayMarkup(text: String): AnnotatedString = buildAnnotatedString {
             val style = when {
                 match.groups[1] != null -> { append(match.groupValues[1]); bold }
                 match.groups[2] != null -> { append(match.groupValues[2]); SpanStyle(textDecoration = TextDecoration.LineThrough) }
+                match.groups[4] != null -> { append(match.groupValues[4]); SpanStyle(textDecoration = TextDecoration.Underline) }
+                match.groups[5] != null -> {
+                    append(match.groupValues[5])
+                    SpanStyle(fontFamily = FontFamily.Monospace, background = Color.Gray.copy(alpha = 0.22f))
+                }
                 else -> { append(match.groupValues[3]); SpanStyle(fontStyle = FontStyle.Italic) }
             }
             addStyle(style, from, length)
@@ -438,3 +444,4 @@ fun toggleMarkState(state: EditState, mark: String): EditState {
 /** Whether a toolbar button should look pressed. */
 fun isFormatOn(state: EditState, mark: String): Boolean =
     mark !in state.off && (mark in activeFormats(state.value) || mark in state.on)
+

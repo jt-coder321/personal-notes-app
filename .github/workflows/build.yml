@@ -21,10 +21,25 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Decode the release signing key
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/release.keystore"
+          test -s "$GITHUB_WORKSPACE/release.keystore"
+
       - name: Run formatting unit tests
+        env:
+          RELEASE_KEYSTORE_FILE: ${{ github.workspace }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew testDebugUnitTest --stacktrace
 
       - name: Build optimized APK
+        env:
+          RELEASE_KEYSTORE_FILE: ${{ github.workspace }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew assembleRelease --stacktrace
 
       - name: Name the APK with its version

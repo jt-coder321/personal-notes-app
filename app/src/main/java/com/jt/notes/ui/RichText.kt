@@ -1,9 +1,11 @@
 package com.jt.notes.ui
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -12,11 +14,12 @@ import androidx.compose.ui.unit.sp
 /*
  * Rich text for the note editor. The editor holds plain text plus a list of style ranges, so the
  * screen never contains formatting symbols. When a note is saved the styles are written as markdown
- * (**bold**, *italic*, ~~strike~~, # heading), and read back when the note is opened.
+ * (**bold**, *italic*, ~~strike~~, __underline__, `code`, # heading), and read back when the note
+ * is opened.
  */
 
 /** Order matters: it is the nesting order when written as markdown. */
-enum class Fmt { BOLD, STRIKE, ITALIC, H1, H2 }
+enum class Fmt { BOLD, STRIKE, ITALIC, H1, H2, UNDERLINE, CODE }
 
 data class Span(val fmt: Fmt, val start: Int, val end: Int)
 
@@ -29,7 +32,7 @@ data class Rich(
     val off: Set<Fmt> = emptySet(),
 )
 
-private val INLINE_FMTS = listOf(Fmt.BOLD, Fmt.STRIKE, Fmt.ITALIC)
+private val INLINE_FMTS = listOf(Fmt.BOLD, Fmt.STRIKE, Fmt.ITALIC, Fmt.UNDERLINE, Fmt.CODE)
 private val MARKER = Regex("^(• |▎ |\\d+\\. )")
 private const val BULLET = "• "
 private const val QUOTE = "▎ "
@@ -84,6 +87,13 @@ private fun setCoverage(spans: List<Span>, fmt: Fmt, a: Int, b: Int, want: Boole
     }
     if (want) rest.add(Span(fmt, a, b))
     return rest
+}
+
+/** Removes every style from [start, end), splitting ranges that run past it. Scanned text stays plain. */
+fun clearSpanRange(r: Rich, start: Int, end: Int): Rich {
+    var spans = r.spans
+    for (f in Fmt.values()) spans = setCoverage(spans, f, start, end, false)
+    return r.copy(spans = normalize(r.text, spans))
 }
 
 private fun lineStart(text: String, pos: Int): Int = text.lastIndexOf('\n', pos - 1) + 1
@@ -261,19 +271,27 @@ const val NUMBER_MARKER = "1. "
 
 // ----- markdown in and out -----
 
-private val INLINE = Regex("\\*\\*\\*(.+?)\\*\\*\\*|\\*\\*(.+?)\\*\\*|~~(.+?)~~|(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)")
+private val INLINE = Regex("\\*\\*\\*(.+?)\\*\\*\\*|\\*\\*(.+?)\\*\\*|~~(.+?)~~|(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)|__(.+?)__|`([^`\\n]+?)`")
 
 private fun parseInline(s: String, sb: StringBuilder, spans: MutableList<Span>) {
     var cursor = 0
     for (m in INLINE.findAll(s)) {
         sb.append(s, cursor, m.range.first)
         val start = sb.length
+        if (m.groups[6] != null) {
+            // Code spans keep their contents literal: no nested styles inside backticks.
+            sb.append(m.groupValues[6])
+            spans.add(Span(Fmt.CODE, start, sb.length))
+            cursor = m.range.last + 1
+            continue
+        }
         val fmts: List<Fmt>
         val inner: String
         when {
             m.groups[1] != null -> { inner = m.groupValues[1]; fmts = listOf(Fmt.BOLD, Fmt.ITALIC) }
             m.groups[2] != null -> { inner = m.groupValues[2]; fmts = listOf(Fmt.BOLD) }
             m.groups[3] != null -> { inner = m.groupValues[3]; fmts = listOf(Fmt.STRIKE) }
+            m.groups[5] != null -> { inner = m.groupValues[5]; fmts = listOf(Fmt.UNDERLINE) }
             else -> { inner = m.groupValues[4]; fmts = listOf(Fmt.ITALIC) }
         }
         parseInline(inner, sb, spans)
@@ -305,7 +323,7 @@ fun richFromMarkdown(md: String): Rich {
     return Rich(text, normalize(text, spans), TextRange(text.length))
 }
 
-private fun mark(f: Fmt) = when (f) { Fmt.BOLD -> "**"; Fmt.STRIKE -> "~~"; Fmt.ITALIC -> "*"; else -> "" }
+private fun mark(f: Fmt) = when (f) { Fmt.BOLD -> "**"; Fmt.STRIKE -> "~~"; Fmt.ITALIC -> "*"; Fmt.UNDERLINE -> "__"; Fmt.CODE -> "`"; else -> "" }
 
 /** Saves a note: writes the style ranges as markdown. */
 fun richToMarkdown(r: Rich): String {
@@ -348,16 +366,40 @@ fun richToMarkdown(r: Rich): String {
 
 // ----- display -----
 
-fun richAnnotated(r: Rich): AnnotatedString = buildAnnotatedString {
+/** A [[Note title]] reference in the editor text. The same pattern lives in NoteLinks.kt. */
+private val LINK_REF = Regex("\\[\\[([^\\[\\]]+)\\]\\]")
+
+/**
+ * Styles the editor text. Titles in [linkTitles] that appear as [[title]]
+ * are underlined and tinted; unresolved [[text]] stays plain. This only
+ * adds display styles: the markers and spans are untouched.
+ */
+fun richAnnotated(r: Rich, linkTitles: Set<String> = emptySet(), linkColor: Color = Color.Unspecified): AnnotatedString = buildAnnotatedString {
     append(r.text)
     for (sp in r.spans) {
         val style = when (sp.fmt) {
             Fmt.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
             Fmt.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
             Fmt.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
+            Fmt.UNDERLINE -> SpanStyle(textDecoration = TextDecoration.Underline)
+            Fmt.CODE -> SpanStyle(
+                fontFamily = FontFamily.Monospace,
+                background = Color.Gray.copy(alpha = 0.22f),
+            )
             Fmt.H1 -> SpanStyle(fontWeight = FontWeight.SemiBold, fontSize = 25.sp)
             Fmt.H2 -> SpanStyle(fontWeight = FontWeight.SemiBold, fontSize = 21.sp)
         }
         addStyle(style, sp.start.coerceIn(0, r.text.length), sp.end.coerceIn(0, r.text.length))
+    }
+    if (linkTitles.isNotEmpty()) {
+        for (match in LINK_REF.findAll(r.text)) {
+            if (match.groupValues[1].trim() in linkTitles) {
+                addStyle(
+                    SpanStyle(textDecoration = TextDecoration.Underline, color = linkColor),
+                    match.range.first,
+                    match.range.last + 1,
+                )
+            }
+        }
     }
 }

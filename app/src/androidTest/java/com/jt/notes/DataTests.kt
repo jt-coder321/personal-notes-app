@@ -19,10 +19,15 @@ import com.jt.notes.data.Label
 import com.jt.notes.data.MIGRATION_1_2
 import com.jt.notes.data.MIGRATION_2_3
 import com.jt.notes.data.MIGRATION_3_4
+import com.jt.notes.data.MIGRATION_4_5
+import com.jt.notes.data.MIGRATION_5_6
+import com.jt.notes.data.MIGRATION_6_7
 import com.jt.notes.data.Note
 import com.jt.notes.data.NoteExport
 import com.jt.notes.data.NoteLabel
 import com.jt.notes.data.NotesDb
+import com.jt.notes.data.PlaceReminder
+import com.jt.notes.data.Template
 import com.jt.notes.data.Version
 import com.jt.notes.data.WrongPasswordException
 import com.jt.notes.data.checklistBodyToText
@@ -380,7 +385,7 @@ class DataTests {
         )
         v1.close()
 
-        val db = Room.databaseBuilder(context, NotesDb::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+        val db = Room.databaseBuilder(context, NotesDb::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build()
         val dao = db.dao()
         val note = dao.getNoteByUuid("old")!!
         assertEquals("Written before the update", note.title)
@@ -389,12 +394,29 @@ class DataTests {
         assertEquals(5, note.remindGapMin)
         assertFalse(note.remindAlarm)
         assertEquals(0, note.remindDone)
+        assertEquals(0, note.remindRepeat)
+        assertNull(note.remindAnchor)
         assertEquals(2L, note.position)
         dao.insertAttachment(Attachment(noteId = note.id, fileName = "a.jpg", createdAt = 1))
         dao.insertVersion(Version(noteId = note.id, title = "t", body = "b", isChecklist = false, savedAt = 1))
         dao.updateNote(note.copy(reminderAt = 5))
         assertEquals(5L, dao.getNote(note.id)!!.reminderAt)
+        // Version 6: labels gain a parent (top level by default), and the new
+        // templates and place-reminder tables accept rows.
+        val labelId = dao.insertLabel(Label(name = "nested"))
+        assertNull(dao.allLabels().first { it.id == labelId }.parentId)
+        dao.insertTemplate(Template(title = "Starter", body = "hello", isChecklist = false, createdAt = 1))
+        assertEquals(1, dao.allTemplates().size)
+        dao.insertPlaceReminder(
+            PlaceReminder(noteId = note.id, latitude = 1.0, longitude = 2.0, radiusM = 250, trigger = 0)
+        )
+        val place = dao.placeReminderFor(note.id)!!
+        assertFalse(place.fired)
+        assertNull(place.lastInside)
+        // Version 7: notes gain a lock, off by default.
+        assertFalse(note.locked)
         db.close()
         context.deleteDatabase(name)
     }
 }
+
