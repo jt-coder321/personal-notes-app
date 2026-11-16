@@ -42,6 +42,9 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew assembleRelease --stacktrace
 
+      - name: Compile instrumented tests
+        run: ./gradlew assembleDebugAndroidTest --stacktrace
+
       - name: Name the APK with its version
         id: ver
         run: |
