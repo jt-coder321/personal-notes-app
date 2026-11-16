@@ -87,8 +87,8 @@ object NoteExport {
         pdf.close()
     }
 
-    /** Drops the simple formatting marks so exported text reads cleanly. */
-    private fun plainFromMarkup(body: String): String =
+    /** Drops the simple formatting marks so exported text reads cleanly. Also used for word counts and widget lines. */
+    fun plainFromMarkup(body: String): String =
         body.split("\n").joinToString("\n") { line ->
             val stripped = when {
                 line.startsWith("## ") -> line.substring(3)

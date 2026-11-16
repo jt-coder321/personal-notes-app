@@ -80,6 +80,9 @@ dependencies {
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.documentfile:documentfile:1.0.1")
+    // OCR scan: the model downloads through Google Play services on first use,
+    // so the app itself stays small (about 260 KB for the client).
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.2")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))

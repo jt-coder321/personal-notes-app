@@ -52,6 +52,8 @@ data class Note(
     val remindAnchor: Long? = null,
     /** Place in "My order". Bigger comes first. New notes start at the top. */
     @ColumnInfo(defaultValue = "0") val position: Long = System.currentTimeMillis(),
+    /** True when the note needs a biometric check before it can be read. */
+    @ColumnInfo(defaultValue = "0") val locked: Boolean = false,
 )
 
 @Entity(tableName = "labels", indices = [Index(value = ["name"], unique = true)])
@@ -417,9 +419,16 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+/** Version 7 adds the per-note lock. Existing notes start unlocked. */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `locked` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(
     entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, AudioClip::class, Version::class, Template::class, PlaceReminder::class],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class NotesDb : RoomDatabase() {
@@ -431,11 +440,10 @@ abstract class NotesDb : RoomDatabase() {
 
         fun get(context: Context): NotesDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, NotesDb::class.java, "notes.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build()
                 .also { instance = it }
         }
     }
 }
-
 

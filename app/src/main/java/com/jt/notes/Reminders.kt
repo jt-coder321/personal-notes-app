@@ -28,8 +28,10 @@ object Reminders {
     const val ACTION_SNOOZE = "com.jt.notes.REMIND_SNOOZE"
     const val EXTRA_NOTE_ID = "noteId"
     const val EXTRA_ACK = "ack"
+    const val EXTRA_SNOOZE_MIN = "snoozeMin"
     const val SNOOZE_MIN = 10
-    private const val CHANNEL = "reminders"
+    // Public so the due-date worker can post on the same channel.
+    const val CHANNEL = "reminders"
     private const val CHANNEL_ALARM = "reminders_alarm"
 
     fun ensureChannel(context: Context) {
@@ -106,6 +108,16 @@ object Reminders {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val icon = Icon.createWithResource(context, R.drawable.ic_stat_note)
+        // Snooze opens the picker, so the person chooses how long. The
+        // full-screen alarm keeps its fixed 10-minute Snooze button.
+        val snoozePicker = PendingIntent.getActivity(
+            context,
+            noteId.toInt(),
+            Intent(context, SnoozeActivity::class.java)
+                .putExtra(EXTRA_NOTE_ID, noteId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val builder = Notification.Builder(context, if (note.remindAlarm) CHANNEL_ALARM else CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_note)
             .setContentTitle(note.title.ifBlank { "Reminder" })
@@ -113,7 +125,7 @@ object Reminders {
             .setStyle(Notification.BigTextStyle().bigText(text))
             .setContentIntent(open)
             .setAutoCancel(true)
-            .addAction(Notification.Action.Builder(icon, "Snooze $SNOOZE_MIN min", actionIntent(context, noteId, ACTION_SNOOZE)).build())
+            .addAction(Notification.Action.Builder(icon, "Snooze", snoozePicker).build())
             .addAction(Notification.Action.Builder(icon, "Done", actionIntent(context, noteId, ACTION_DONE)).build())
         if (note.remindAlarm) builder.setCategory(Notification.CATEGORY_ALARM)
         if (note.remindAlarm) {
@@ -182,13 +194,19 @@ class ReminderReceiver : BroadcastReceiver() {
                     Reminders.ACTION_SNOOZE -> {
                         val note = dao.getNote(id)
                         if (note != null) {
-                            val next = ReminderPlan.snooze(note.remindPings, System.currentTimeMillis(), Reminders.SNOOZE_MIN)
+                            // The picker names its minutes; the alarm's button
+                            // sends none and keeps the fixed 10.
+                            val minutes = intent.getIntExtra(Reminders.EXTRA_SNOOZE_MIN, Reminders.SNOOZE_MIN)
+                            val next = ReminderPlan.snooze(note.remindPings, System.currentTimeMillis(), minutes)
                             dao.setReminderState(id, next.nextAt, next.done)
                             next.nextAt?.let { Reminders.schedule(app, id, it) }
                         }
                         Reminders.dismiss(app, id)
                     }
-                    Intent.ACTION_BOOT_COMPLETED -> Reminders.rescheduleAll(app)
+                    Intent.ACTION_BOOT_COMPLETED -> {
+                        Reminders.rescheduleAll(app)
+                        PinnedNote.restoreAfterBoot(app)
+                    }
                 }
             } finally {
                 pending.finish()
@@ -196,4 +214,3 @@ class ReminderReceiver : BroadcastReceiver() {
         }
     }
 }
-

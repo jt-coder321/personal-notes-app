@@ -73,6 +73,7 @@ object Backup {
             o.put("color", n.color)
             o.put("pinned", n.pinned)
             o.put("archived", n.archived)
+            o.put("locked", n.locked)
             n.trashedAt?.let { o.put("trashedAt", it) }
             n.reminderAt?.let { o.put("reminderAt", it) }
             o.put("position", n.position)
@@ -210,6 +211,7 @@ object Backup {
                     color = o.optInt("color"),
                     pinned = o.optBoolean("pinned"),
                     archived = o.optBoolean("archived"),
+                    locked = o.optBoolean("locked"),
                     trashedAt = if (o.has("trashedAt")) o.getLong("trashedAt") else null,
                     reminderAt = if (o.has("reminderAt")) o.getLong("reminderAt") else null,
                     position = o.optLong("position", o.optLong("updatedAt", System.currentTimeMillis())),
@@ -260,4 +262,3 @@ object Backup {
     suspend fun ensureLabel(dao: NotesDao, name: String): Long =
         dao.labelByName(name)?.id ?: dao.insertLabel(Label(name = name))
 }
-

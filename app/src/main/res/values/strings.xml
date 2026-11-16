@@ -11,6 +11,13 @@
     <string name="widget_empty">No notes yet. Tap + to add one.</string>
     <string name="widget_checklist_name">Checklist</string>
     <string name="widget_checklist_empty">No checklist yet. Tap + to start one.</string>
+    <string name="widget_single_name">Single note</string>
+    <string name="shortcut_new_note">New note</string>
+    <string name="shortcut_new_note_long">Write a new note</string>
+    <string name="shortcut_new_checklist">Checklist</string>
+    <string name="shortcut_new_checklist_long">New checklist</string>
+    <string name="shortcut_voice_note">Voice note</string>
+    <string name="shortcut_voice_note_long">Record a voice note</string>
+    <string name="tile_label">New note</string>
 </resources>
-
 

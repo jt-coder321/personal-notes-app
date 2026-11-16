@@ -384,7 +384,7 @@ class DataTests {
         )
         v1.close()
 
-        val db = Room.databaseBuilder(context, NotesDb::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
+        val db = Room.databaseBuilder(context, NotesDb::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build()
         val dao = db.dao()
         val note = dao.getNoteByUuid("old")!!
         assertEquals("Written before the update", note.title)
@@ -412,9 +412,10 @@ class DataTests {
         val place = dao.placeReminderFor(note.id)!!
         assertFalse(place.fired)
         assertNull(place.lastInside)
+        // Version 7: notes gain a lock, off by default.
+        assertFalse(note.locked)
         db.close()
         context.deleteDatabase(name)
     }
 }
-
 
