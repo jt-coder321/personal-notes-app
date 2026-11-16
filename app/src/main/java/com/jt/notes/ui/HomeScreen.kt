@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -49,7 +50,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,6 +64,8 @@ import com.jt.notes.MainActivity
 import com.jt.notes.NoteItem
 import com.jt.notes.NotesViewModel
 import com.jt.notes.Sort
+import com.jt.notes.data.LinkPreview
+import com.jt.notes.data.LinkPreviews
 import com.jt.notes.data.parseItems
 import kotlinx.coroutines.delay
 import java.text.DateFormat
@@ -89,6 +94,7 @@ fun HomeScreen(
     val undo by vm.undo.collectAsStateWithLifecycle()
     val reminders by vm.reminders.collectAsStateWithLifecycle()
     val templates by vm.templates.collectAsStateWithLifecycle()
+    val allNotes by vm.allNotes.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     var searching by rememberSaveable { mutableStateOf(false) }
@@ -102,6 +108,7 @@ fun HomeScreen(
     var showThemeDialog by remember { mutableStateOf(false) }
     var showReminders by remember { mutableStateOf(false) }
     var showTemplates by remember { mutableStateOf(false) }
+    var showCalendar by remember { mutableStateOf(false) }
     val themeId by vm.theme.collectAsStateWithLifecycle()
     var exportPassword by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf(setOf<Long>()) }
@@ -147,6 +154,18 @@ fun HomeScreen(
     val keepLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri -> if (uri != null) vm.importKeep(uri) { toast(it) } }
+
+    val vaultExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri -> if (uri != null) vm.exportVault(uri) { toast(it) } }
+
+    val vaultImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri -> if (uri != null) vm.importVault(uri) { toast(it) } }
+
+    val enexLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) vm.importEvernote(uri) { toast(it) } }
 
     val folderLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -310,6 +329,12 @@ fun HomeScreen(
                                     MenuRow("Reminders", Icons.Outlined.Alarm) {
                                         menuOpen = false; showReminders = true
                                     }
+                                    MenuRow("Calendar", Icons.Outlined.CalendarMonth) {
+                                        menuOpen = false; showCalendar = true
+                                    }
+                                    MenuRow("Today's note", Icons.Outlined.Today) {
+                                        menuOpen = false; vm.openDailyNote()
+                                    }
                                 }
                                 HorizontalDivider()
                                 MenuGroupHeader(
@@ -348,6 +373,21 @@ fun HomeScreen(
                                         menuOpen = false
                                         toast("Pick the Google Takeout zip that contains your Keep notes")
                                         keepLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*"))
+                                    }
+                                    MenuRow("Export as Markdown vault", Icons.Outlined.Description) {
+                                        menuOpen = false
+                                        toast("Pick a folder for one .md file per note")
+                                        vaultExportLauncher.launch(null)
+                                    }
+                                    MenuRow("Import Markdown or Obsidian vault", Icons.Outlined.FileDownload) {
+                                        menuOpen = false
+                                        toast("Pick the folder with the .md files")
+                                        vaultImportLauncher.launch(null)
+                                    }
+                                    MenuRow("Import from Evernote (.enex)", Icons.Outlined.NoteAdd) {
+                                        menuOpen = false
+                                        toast("Pick the .enex file exported from Evernote")
+                                        enexLauncher.launch(arrayOf("application/xml", "text/xml", "*/*"))
                                     }
                                 }
                                 HorizontalDivider()
@@ -600,6 +640,13 @@ fun HomeScreen(
             onApply = { template -> showTemplates = false; vm.applyTemplate(template) },
             onDelete = { template -> vm.deleteTemplate(template) },
             onDismiss = { showTemplates = false },
+        )
+    }
+    if (showCalendar) {
+        CalendarDialog(
+            notes = allNotes,
+            onOpen = { id -> showCalendar = false; onOpen(id) },
+            onDismiss = { showCalendar = false },
         )
     }
     if (showBackupDialog) {
@@ -992,6 +1039,13 @@ private fun NoteCard(
     val p = LocalPalette.current
     val note = item.note
     val background = noteBackground(note.color)
+    // The first URL's preview, fetched once per body. Locked notes fetch nothing.
+    val firstUrl = remember(note.body, note.locked) {
+        if (note.locked) null else LinkPreviews.firstUrl(note.body)
+    }
+    val preview by produceState<LinkPreview?>(initialValue = null, firstUrl) {
+        value = firstUrl?.let { LinkPreviews.fetch(it) }
+    }
     val shape = RoundedCornerShape(p.cardRadius)
     // While arranging, every note jiggles like icons on a home screen, except the one being dragged.
     val wiggle = rememberWiggle(active = jiggle && !dragging, seed = note.id)
@@ -1022,12 +1076,29 @@ private fun NoteCard(
             .then(if (arrange) handle else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
     ) {
         Column {
-            item.images.firstOrNull()?.let { name ->
-                NoteImage(name = name, maxPx = 480, modifier = Modifier.fillMaxWidth().height(120.dp))
+            // A locked note shows no picture and no preview: title and lock only.
+            if (!note.locked) {
+                item.images.firstOrNull()?.let { name ->
+                    NoteImage(name = name, maxPx = 480, modifier = Modifier.fillMaxWidth().height(120.dp))
+                }
             }
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val soft = p.ink.copy(alpha = 0.78f)
-                if (note.isChecklist) {
+                if (note.locked) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(Icons.Outlined.Lock, contentDescription = "Locked note", modifier = Modifier.size(18.dp))
+                        Text(
+                            note.title.ifBlank { "Locked note" },
+                            fontFamily = Display,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 17.sp,
+                            lineHeight = 22.sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                } else if (note.isChecklist) {
                     val all = remember(note.body) { parseItems(note.body).filter { it.text.isNotBlank() } }
                     val openItems = all.filter { !it.checked }
                     val done = all.size - openItems.size
@@ -1094,8 +1165,9 @@ private fun NoteCard(
                         )
                     }
                 }
+                preview?.let { LinkPreviewRow(it) }
                 val reminder = note.reminderAt
-                if (reminder != null) {
+                if (reminder != null && !note.locked) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1104,7 +1176,7 @@ private fun NoteCard(
                         Text(formatReminder(reminder), style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                if (item.labels.isNotEmpty()) {
+                if (!note.locked && item.labels.isNotEmpty()) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1119,6 +1191,36 @@ private fun NoteCard(
 
 fun formatReminder(at: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(at))
+
+/** The fetched title and image for the first URL in a note, shown under the card text. */
+@Composable
+private fun LinkPreviewRow(preview: LinkPreview) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(LocalContentColor.current.copy(alpha = 0.06f))
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        preview.image?.let { bitmap ->
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
+            )
+        }
+        Text(
+            preview.title,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
 
 /** A thin bar showing how much of a checklist is done. */
 @Composable
@@ -1160,7 +1262,6 @@ private fun appVersion(): String {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
 }
-
 
 
 

@@ -10,6 +10,7 @@ import com.jt.notes.data.Attachment
 import com.jt.notes.data.AudioClip
 import com.jt.notes.data.AudioClips
 import com.jt.notes.data.Backup
+import com.jt.notes.data.EvernoteImport
 import com.jt.notes.data.Images
 import com.jt.notes.data.KeepImport
 import com.jt.notes.data.Label
@@ -20,9 +21,12 @@ import com.jt.notes.data.NotesDb
 import com.jt.notes.data.PlaceReminder
 import com.jt.notes.data.Template
 import com.jt.notes.data.Version
+import com.jt.notes.data.Vault
 import com.jt.notes.data.WrongPasswordException
+import com.jt.notes.data.checklistBodyToText
 import com.jt.notes.data.clearChecks
 import com.jt.notes.data.isBlank
+import com.jt.notes.data.textToChecklistBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,6 +39,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.time.LocalDate
 import java.util.UUID
 
 sealed interface Filter {
@@ -90,6 +95,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     /** A note the app should open next (from a share, the widget, or a reminder). */
     val pendingOpen = MutableStateFlow<Long?>(null)
 
+    /** The note whose editor should start recording as soon as it opens (voice-note shortcut). */
+    val autoRecordFor = MutableStateFlow<Long?>(null)
+
     val labels: StateFlow<List<Label>> =
         dao.observeLabels().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -107,6 +115,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     val placeReminders: StateFlow<List<PlaceReminder>> =
         dao.observePlaceReminders().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Every note, unfiltered: backlinks, the calendar and the widget picker read from here. */
+    val allNotes: StateFlow<List<Note>> =
+        dao.observeNotes().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Notes with a reminder still to come, soonest first. */
     val reminders: StateFlow<List<Note>> =
@@ -134,10 +146,11 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             val shown = all.filter { item ->
                 val n = item.note
                 if (q.isNotEmpty()) {
-                    // Search looks through everything except the trash.
+                    // Search looks through everything except the trash. A locked
+                    // note only matches its title and labels, never its body.
                     n.trashedAt == null && (
                         n.title.contains(q, ignoreCase = true) ||
-                            n.body.contains(q, ignoreCase = true) ||
+                            (!n.locked && n.body.contains(q, ignoreCase = true)) ||
                             item.labels.any { it.name.contains(q, ignoreCase = true) }
                         )
                 } else when (filter) {
@@ -255,6 +268,30 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { pendingOpen.value = createNote(isChecklist, title, body) }
     }
 
+    /**
+     * Opens today's note, creating it when there is none. The title is the
+     * ISO date ("2026-11-16"), unambiguous in every locale. Manual only:
+     * nothing is created on launch.
+     */
+    fun openDailyNote() {
+        viewModelScope.launch {
+            val title = LocalDate.now().toString()
+            val existing = dao.allNotes()
+                .filter { it.title == title && it.trashedAt == null }
+                .maxByOrNull { it.updatedAt }
+            pendingOpen.value = existing?.id ?: createNote(isChecklist = false, title = title, body = "")
+        }
+    }
+
+    /** Creates a note and asks its editor to start recording right away. */
+    fun createVoiceNote() {
+        viewModelScope.launch {
+            val id = createNote(isChecklist = false)
+            autoRecordFor.value = id
+            pendingOpen.value = id
+        }
+    }
+
     suspend fun getNote(id: Long): Note? = writeLock.withLock { dao.getNote(id) }
 
     /** Writes the note exactly as given, except the drag order and reminder progress, which belong to others. */
@@ -317,6 +354,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun trash(notes: List<Note>) {
         notes.forEach { Reminders.cancel(context, it.id) }
+        notes.forEach { PinnedNote.unpinIfPinned(context, it.id) }
         viewModelScope.launch { notes.forEach { dao.deletePlaceReminder(it.id) } }
         bulkUpdate(notes, if (notes.size == 1) "Moved to Trash" else "${notes.size} notes moved to Trash") {
             it.copy(trashedAt = System.currentTimeMillis(), pinned = false)
@@ -331,6 +369,72 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setPinned(notes: List<Note>, pinned: Boolean) = bulkUpdate(notes, null) { it.copy(pinned = pinned) }
+
+    /** Locks or unlocks one note, reading it fresh so no other change is lost. */
+    fun setNoteLocked(noteId: Long, locked: Boolean) {
+        viewModelScope.launch {
+            writeLock.withLock {
+                dao.getNote(noteId)?.let { dao.updateNote(it.copy(locked = locked)) }
+            }
+            if (locked) PinnedNote.unpinIfPinned(context, noteId)
+        }
+    }
+
+    /**
+     * Appends the source note's body to the target's, keeps the target's
+     * pre-merge text in version history, then trashes the source. Text
+     * targets join with a blank line; checklist targets join with a single
+     * line break, so no empty item appears. Mixing types converts: text
+     * lines become items in a checklist target, and checklist items lose
+     * their boxes in a text target.
+     */
+    fun mergeNotes(sourceId: Long, targetId: Long, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val message = try {
+                writeLock.withLock {
+                    val source = dao.getNote(sourceId) ?: error("That note is gone")
+                    val target = dao.getNote(targetId) ?: error("That note is gone")
+                    val now = System.currentTimeMillis()
+                    val incoming = when {
+                        source.body.isBlank() -> ""
+                        target.isChecklist && source.isChecklist -> source.body
+                        target.isChecklist -> textToChecklistBody(source.body)
+                        source.isChecklist -> checklistBodyToText(source.body)
+                        else -> source.body
+                    }
+                    val mixed = target.isChecklist != source.isChecklist && incoming.isNotBlank()
+                    val merged = when {
+                        incoming.isBlank() -> target.body
+                        target.body.isBlank() -> incoming
+                        target.isChecklist -> target.body.trimEnd() + "\n" + incoming
+                        else -> target.body.trimEnd() + "\n\n" + incoming
+                    }
+                    if (merged != target.body) {
+                        dao.insertVersion(
+                            Version(
+                                noteId = target.id,
+                                title = target.title,
+                                body = target.body,
+                                isChecklist = target.isChecklist,
+                                savedAt = target.updatedAt,
+                            ),
+                        )
+                        dao.trimVersions(target.id, VERSIONS_KEPT)
+                        dao.updateNote(target.copy(body = merged, updatedAt = now))
+                    }
+                    Reminders.cancel(context, source.id)
+                    dao.deletePlaceReminder(source.id)
+                    dao.updateNote(source.copy(trashedAt = now, pinned = false))
+                    PinnedNote.unpinIfPinned(context, source.id)
+                    val name = target.title.ifBlank { "Untitled note" }
+                    "Merged into \"$name\"" + if (mixed && !target.isChecklist) " (list items added as plain lines)" else ""
+                }
+            } catch (e: Exception) {
+                "Merge failed: ${e.message}"
+            }
+            onDone(message)
+        }
+    }
 
     fun restore(notes: List<Note>) = bulkUpdate(notes, null) { it.copy(trashedAt = null) }
 
@@ -651,6 +755,47 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun exportVault(uri: Uri, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val message = try {
+                val result = withContext(Dispatchers.IO) { Vault.export(context, db, uri) }
+                "Exported ${result.written} notes as Markdown" +
+                    if (result.imagesSkipped > 0) " (${result.imagesSkipped} pictures were skipped)" else ""
+            } catch (e: Exception) {
+                "Export failed: ${e.message}"
+            }
+            onDone(message)
+        }
+    }
+
+    fun importVault(uri: Uri, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val message = try {
+                val result = withContext(Dispatchers.IO) { Vault.import(context, db, uri) }
+                "Imported ${result.added} notes from Markdown" +
+                    if (result.failed > 0) " (${result.failed} files could not be read)" else ""
+            } catch (e: Exception) {
+                "Import failed: ${e.message}"
+            }
+            onDone(message)
+        }
+    }
+
+    fun importEvernote(uri: Uri, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            val message = try {
+                val count = withContext(Dispatchers.IO) {
+                    val input = context.contentResolver.openInputStream(uri) ?: error("could not open the file")
+                    input.use { EvernoteImport.import(db, it).added }
+                }
+                "Imported $count notes from Evernote"
+            } catch (e: Exception) {
+                "Import failed: ${e.message}"
+            }
+            onDone(message)
+        }
+    }
+
     fun exportPdf(note: Note, uri: Uri, onDone: (String) -> Unit) {
         viewModelScope.launch {
             val message = try {
@@ -691,5 +836,4 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         autoBackupFolder.value = uri?.toString()
     }
 }
-
 

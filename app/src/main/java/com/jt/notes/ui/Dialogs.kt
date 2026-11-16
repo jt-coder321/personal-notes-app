@@ -431,6 +431,56 @@ fun VersionHistoryDialog(versions: List<Version>, onRestore: (Version) -> Unit, 
 
 
 
+/** Picks the note another note merges into. The source itself and trash are left out. */
+@Composable
+fun MergeTargetDialog(
+    notes: List<Note>,
+    excludeId: Long,
+    onPick: (Note) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val targets = notes.filter { it.id != excludeId && it.trashedAt == null }.sortedByDescending { it.updatedAt }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Merge into another note") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (targets.isEmpty()) {
+                    Text("No other notes to merge into.")
+                }
+                targets.forEach { target ->
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(target) }
+                            .padding(vertical = 10.dp),
+                    ) {
+                        Text(
+                            target.title.ifBlank { "Untitled note" },
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (!target.locked) {
+                            val firstLine = (if (target.isChecklist) checklistBodyToText(target.body) else target.body)
+                                .lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+                            if (firstLine.isNotEmpty()) {
+                                Text(
+                                    firstLine,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 /** Lists saved templates. Tapping one starts a new note from it; the X deletes it. */
 @Composable
 fun TemplatesDialog(
