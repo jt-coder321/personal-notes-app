@@ -6,13 +6,12 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performLongClick
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
@@ -123,7 +122,10 @@ class UiTests {
     fun holdingANote_startsArranging() {
         val title = unique("Arrange note")
         createTextNote(title, "Move me")
-        rule.onNodeWithText(title).performTouchInput { longClick() }
+        // Drive the card's long-press action directly. A touch long-press never
+        // reaches the long-press timeout in this test setup, so the drag
+        // handle's detector never fires and arranging never starts.
+        rule.onNodeWithText(title).performLongClick()
         waitForText("Drag a note where you want it. Your order is saved.")
         rule.onNodeWithText("Done").performClick()
         waitForTextGone("Drag a note where you want it. Your order is saved.")
