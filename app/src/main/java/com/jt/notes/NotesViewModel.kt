@@ -17,6 +17,8 @@ import com.jt.notes.data.Note
 import com.jt.notes.data.NoteExport
 import com.jt.notes.data.NoteLabel
 import com.jt.notes.data.NotesDb
+import com.jt.notes.data.PlaceReminder
+import com.jt.notes.data.Template
 import com.jt.notes.data.Version
 import com.jt.notes.data.WrongPasswordException
 import com.jt.notes.data.clearChecks
@@ -100,6 +102,12 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     val audioClips: StateFlow<List<AudioClip>> =
         dao.observeAudioClips().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    val templates: StateFlow<List<Template>> =
+        dao.observeTemplates().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val placeReminders: StateFlow<List<PlaceReminder>> =
+        dao.observePlaceReminders().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     /** Notes with a reminder still to come, soonest first. */
     val reminders: StateFlow<List<Note>> =
         dao.observeNotes()
@@ -121,7 +129,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     val items: StateFlow<List<NoteItem>> =
-        combine(allItems, filter, query, sort) { all, filter, query, sort ->
+        combine(allItems, labels, filter, query, sort) { all, labels, filter, query, sort ->
             val q = query.trim()
             val shown = all.filter { item ->
                 val n = item.note
@@ -136,7 +144,11 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                     Filter.Notes -> !n.archived && n.trashedAt == null
                     Filter.Archive -> n.archived && n.trashedAt == null
                     Filter.Trash -> n.trashedAt != null
-                    is Filter.ByLabel -> n.trashedAt == null && item.labels.any { it.id == filter.labelId }
+                    // Filtering by a parent label includes notes labeled with any of its descendants.
+                    is Filter.ByLabel -> n.trashedAt == null && run {
+                        val wanted = LabelTree.descendantIds(labels, filter.labelId) + filter.labelId
+                        item.labels.any { it.id in wanted }
+                    }
                 }
             }
             when (sort) {
@@ -305,6 +317,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun trash(notes: List<Note>) {
         notes.forEach { Reminders.cancel(context, it.id) }
+        viewModelScope.launch { notes.forEach { dao.deletePlaceReminder(it.id) } }
         bulkUpdate(notes, if (notes.size == 1) "Moved to Trash" else "${notes.size} notes moved to Trash") {
             it.copy(trashedAt = System.currentTimeMillis(), pinned = false)
         }
@@ -408,11 +421,12 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Clears a reminder entirely, including its repeat chain. */
+    /** Clears a reminder entirely, including its repeat chain and any place reminder. */
     fun clearReminder(noteId: Long) {
         viewModelScope.launch {
             Reminders.cancel(context, noteId)
             dao.clearReminderFull(noteId)
+            dao.deletePlaceReminder(noteId)
             Reminders.dismiss(context, noteId)
         }
     }
@@ -420,6 +434,48 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     fun setReminder(noteId: Long, at: Long?) {
         if (at == null) Reminders.cancel(context, noteId) else Reminders.schedule(context, noteId, at)
     }
+
+    // ----- templates -----
+
+    fun saveTemplate(title: String, body: String, isChecklist: Boolean) = viewModelScope.launch {
+        val fallback = body.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        dao.insertTemplate(
+            Template(
+                title = title.ifBlank { fallback }.ifBlank { "Untitled template" },
+                body = body,
+                isChecklist = isChecklist,
+                createdAt = System.currentTimeMillis(),
+            )
+        )
+    }
+
+    fun deleteTemplate(template: Template) = viewModelScope.launch { dao.deleteTemplate(template) }
+
+    /** Creates a new note from a template and opens it. Checklist templates start unchecked. */
+    fun applyTemplate(template: Template) {
+        val body = if (template.isChecklist) clearChecks(template.body) else template.body
+        createAndOpen(template.isChecklist, template.title, body)
+    }
+
+    // ----- place reminders -----
+
+    /** Saves (or replaces) the note's place reminder and makes sure the checker is running. */
+    fun savePlaceReminder(noteId: Long, latitude: Double, longitude: Double, radiusM: Int, trigger: Int) {
+        viewModelScope.launch {
+            dao.insertPlaceReminder(
+                PlaceReminder(
+                    noteId = noteId,
+                    latitude = latitude,
+                    longitude = longitude,
+                    radiusM = radiusM,
+                    trigger = trigger,
+                )
+            )
+            PlaceReminders.scheduleWorker(context)
+        }
+    }
+
+    fun clearPlaceReminder(noteId: Long) = viewModelScope.launch { dao.deletePlaceReminder(noteId) }
 
     // ----- pictures -----
 
@@ -490,7 +546,17 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteLabel(label: Label) {
         if (filter.value == Filter.ByLabel(label.id)) filter.value = Filter.Notes
-        viewModelScope.launch { dao.deleteLabel(label) }
+        viewModelScope.launch {
+            // Children of a deleted label move to the top level instead of vanishing.
+            dao.clearChildrenParent(label.id)
+            dao.deleteLabel(label)
+        }
+    }
+
+    /** Moves a label under a new parent (or to the top level). Cycles are refused. */
+    fun setLabelParent(label: Label, parentId: Long?) {
+        if (!LabelTree.canParent(labels.value, label.id, parentId)) return
+        viewModelScope.launch { dao.updateLabel(label.copy(parentId = parentId)) }
     }
 
     fun setNoteLabel(noteId: Long, labelId: Long, on: Boolean) {
@@ -625,4 +691,5 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         autoBackupFolder.value = uri?.toString()
     }
 }
+
 

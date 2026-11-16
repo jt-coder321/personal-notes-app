@@ -88,6 +88,7 @@ fun HomeScreen(
     val autoFolder by vm.autoBackupFolder.collectAsStateWithLifecycle()
     val undo by vm.undo.collectAsStateWithLifecycle()
     val reminders by vm.reminders.collectAsStateWithLifecycle()
+    val templates by vm.templates.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     var searching by rememberSaveable { mutableStateOf(false) }
@@ -100,6 +101,7 @@ fun HomeScreen(
     var showAutoBackupDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
     var showReminders by remember { mutableStateOf(false) }
+    var showTemplates by remember { mutableStateOf(false) }
     val themeId by vm.theme.collectAsStateWithLifecycle()
     var exportPassword by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf(setOf<Long>()) }
@@ -318,6 +320,7 @@ fun HomeScreen(
                                 )
                                 if (expandedMenuGroup == "organize") {
                                     MenuRow("Edit labels", Icons.Outlined.Edit) { menuOpen = false; showManageLabels = true }
+                                    MenuRow("Templates", Icons.Outlined.Description) { menuOpen = false; showTemplates = true }
                                     MenuRow("Theme", Icons.Outlined.Palette) { menuOpen = false; showThemeDialog = true }
                                 }
                                 HorizontalDivider()
@@ -589,6 +592,14 @@ fun HomeScreen(
             onOpen = { id -> showReminders = false; onOpen(id) },
             onClear = { id -> vm.clearReminder(id) },
             onDismiss = { showReminders = false },
+        )
+    }
+    if (showTemplates) {
+        TemplatesDialog(
+            templates = templates,
+            onApply = { template -> showTemplates = false; vm.applyTemplate(template) },
+            onDelete = { template -> vm.deleteTemplate(template) },
+            onDismiss = { showTemplates = false },
         )
     }
     if (showBackupDialog) {
@@ -1149,6 +1160,7 @@ private fun appVersion(): String {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
 }
+
 
 
 
