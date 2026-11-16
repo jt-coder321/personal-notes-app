@@ -108,7 +108,10 @@ class UiTests {
     fun longPress_selectsANote_andArchivesIt() {
         val title = unique("Archive note")
         createTextNote(title, "Bulk action")
+        // Holding a note starts arranging; tapping a note while arranging selects it.
         rule.onNodeWithText(title).performTouchInput { longClick() }
+        waitForText("Drag a note where you want it. Tap notes to select them. Your order is saved.")
+        rule.onNodeWithText(title).performClick()
         waitForText("1 selected")
         rule.onNodeWithContentDescription("Archive").performClick()
         waitForTextGone(title)

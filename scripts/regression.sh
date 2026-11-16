@@ -147,6 +147,7 @@ else
   record "FAIL  instrumented tests"; RESULT=1
 fi
 tail -60 "$OUT/gradle-tests.txt"
+grep -E "FAILED|AssertionError|ComposeTimeoutException|Test .* failed" "$OUT/gradle-tests.txt" | cut -c1-300 | head -20
 adb logcat -d > "$OUT/logcat-tests.txt"
 cp -r app/build/reports/androidTests "$OUT/test-report" 2> /dev/null || true
 cp -r app/build/outputs/androidTest-results "$OUT/test-results" 2> /dev/null || true
