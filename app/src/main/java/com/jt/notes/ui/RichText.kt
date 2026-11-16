@@ -136,7 +136,9 @@ private fun applyChange(old: Rich, p: Int, r: Int, ins: String, newSel: TextRang
     var off = old.off
     if (m > 0) {
         val explicit = on.isNotEmpty() || off.isNotEmpty()
-        val base = styleBefore(old, p) + old.spans.filter { (it.fmt == Fmt.H1 || it.fmt == Fmt.H2) && it.start == p }.map { it.fmt }
+        // Typing over selected text takes the style of the text it replaces.
+        val replaced = if (r > 0) old.spans.filter { it.start <= p && it.end > p }.map { it.fmt }.toSet() else null
+        val base = (replaced ?: styleBefore(old, p)) + old.spans.filter { (it.fmt == Fmt.H1 || it.fmt == Fmt.H2) && it.start == p }.map { it.fmt }
         val styled = want ?: if (explicit) (base + on) - off else base
         for (f in Fmt.values()) spans = setCoverage(spans, f, p, p + m, f in styled)
         if (want == null) {
