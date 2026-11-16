@@ -394,6 +394,19 @@ fun breakFormatting(old: TextFieldValue, new: TextFieldValue): Pair<TextFieldVal
     return TextFieldValue(text, TextRange(pos + pre.length + 1)) to pending
 }
 
+/** Deleting the only letter of a bold, italic or struck word removes its (hidden) symbols too. */
+fun dropEmptyRun(old: TextFieldValue, new: TextFieldValue): TextFieldValue {
+    if (new.text.length != old.text.length - 1 || !new.selection.collapsed) return new
+    val k = new.selection.start
+    for ((regex, n) in listOf(BOLD to 2, STRIKE to 2, ITALIC to 1)) {
+        val run = regex.findAll(old.text).firstOrNull { it.range.last - it.range.first + 1 == 2 * n + 1 && it.range.first + n == k }
+        if (run != null && old.text.removeRange(k, k + 1) == new.text) {
+            return TextFieldValue(old.text.removeRange(run.range.first, run.range.last + 1), TextRange(run.range.first))
+        }
+    }
+    return new
+}
+
 /** The editor's text plus the formats switched on or off for the next typed text. */
 data class EditState(
     val value: TextFieldValue,
@@ -403,7 +416,7 @@ data class EditState(
 
 /** Handles one edit coming from the keyboard. */
 fun processEdit(old: EditState, incoming: TextFieldValue): EditState {
-    val fixed = fixHiddenDelete(old.value, incoming)
+    val fixed = dropEmptyRun(old.value, fixHiddenDelete(old.value, incoming))
     applyPending(old.value, fixed, old.on, old.off)?.let { return EditState(it) }
     breakFormatting(old.value, fixed)?.let { (value, pending) -> return EditState(continueList(old.value, value), pending) }
     val next = continueList(old.value, fixed)

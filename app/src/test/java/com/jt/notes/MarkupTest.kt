@@ -53,7 +53,7 @@ class MarkupTest {
     @Test fun boldCanBeSwitchedOffAndOn() {
         val s = start().mark("**").type("bold").mark("**").type(" plain")
         assertEquals("**bold** plain", s.text)
-        assertEquals("**bold** plain **again**", s.mark("**").type(" ").mark("**").type("again").text.replace("plain  ", "plain "))
+        assertEquals("**bold** plain**!**", s.mark("**").type("!").text)
     }
 
     @Test fun boldSwitchedOffInTheMiddleSplitsTheRun() {
@@ -118,7 +118,8 @@ class MarkupTest {
     @Test fun backspaceThroughBold() {
         assertEquals("**a**", start("**ab**", 4).backspace().text)
         assertEquals("**a**", start("**ab**", 6).backspace().text)
-        assertEquals("a", start("**a**", 3).backspace().text.let { it.replace("*", "") })
+        assertEquals("", start("**a**", 3).backspace().text)
+        assertEquals("x", start("x*i*", 3).backspace().text)
     }
 
     @Test fun symbolsAreHiddenInTheEditor() {
