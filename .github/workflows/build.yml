@@ -21,6 +21,9 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Run formatting unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
       - name: Build optimized APK
         run: ./gradlew assembleRelease --stacktrace
 

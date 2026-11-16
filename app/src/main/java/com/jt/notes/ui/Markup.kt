@@ -355,6 +355,7 @@ fun applyPending(old: TextFieldValue, new: TextFieldValue, on: Set<String>, off:
     val grew = new.text.length - old.text.length
     if (grew <= 0 || c > old.text.length || new.selection.start != c + grew) return null
     val inserted = new.text.substring(c, c + grew)
+    if (inserted.contains('\n')) return null
     if (new.text != old.text.substring(0, c) + inserted + old.text.substring(c)) return null
     var pos = c
     var pre = ""
@@ -367,3 +368,60 @@ fun applyPending(old: TextFieldValue, new: TextFieldValue, on: Set<String>, off:
     val text = old.text.substring(0, pos) + pre + opens + inserted + closes + post + old.text.substring(pos)
     return TextFieldValue(text, TextRange(pos + pre.length + opens.length + inserted.length))
 }
+
+
+// ----- Enter inside formatted text, and one place that handles every edit -----
+
+/**
+ * Enter pressed inside bold, italic or struck text: the new line goes outside the formatting (so the
+ * markers are never split across lines), and the same formatting stays switched on for the new line.
+ */
+fun breakFormatting(old: TextFieldValue, new: TextFieldValue): Pair<TextFieldValue, Set<String>>? {
+    if (!new.selection.collapsed || new.text.length != old.text.length + 1) return null
+    val cursor = new.selection.start
+    if (cursor < 1 || new.text[cursor - 1] != '\n' || new.text.removeRange(cursor - 1, cursor) != old.text) return null
+    val c = cursor - 1
+    val active = activeFormats(TextFieldValue(old.text, TextRange(c))).filter { it == "**" || it == "*" || it == "~~" }
+    if (active.isEmpty()) return null
+    var pos = c
+    var pre = ""
+    var post = ""
+    val pending = LinkedHashSet<String>()
+    for (m in active) {
+        if (old.text.startsWith(m, pos)) { pos += m.length; pending.add(m) } else { pre += m; post = m + post }
+    }
+    val text = old.text.substring(0, pos) + pre + "\n" + post + old.text.substring(pos)
+    return TextFieldValue(text, TextRange(pos + pre.length + 1)) to pending
+}
+
+/** The editor's text plus the formats switched on or off for the next typed text. */
+data class EditState(
+    val value: TextFieldValue,
+    val on: Set<String> = emptySet(),
+    val off: Set<String> = emptySet(),
+)
+
+/** Handles one edit coming from the keyboard. */
+fun processEdit(old: EditState, incoming: TextFieldValue): EditState {
+    val fixed = fixHiddenDelete(old.value, incoming)
+    applyPending(old.value, fixed, old.on, old.off)?.let { return EditState(it) }
+    breakFormatting(old.value, fixed)?.let { (value, pending) -> return EditState(continueList(old.value, value), pending) }
+    val next = continueList(old.value, fixed)
+    val moved = fixed.text == old.value.text && fixed.selection != old.value.selection
+    return if (moved) EditState(next) else EditState(next, old.on, old.off)
+}
+
+/** A bold, italic or strikethrough button: formats the selection, or switches the style for what is typed next. */
+fun toggleMarkState(state: EditState, mark: String): EditState {
+    val v = state.value
+    if (!v.selection.collapsed) return EditState(toggleWrap(v, mark), state.on, state.off)
+    return if (mark in activeFormats(v)) {
+        state.copy(on = state.on - mark, off = if (mark in state.off) state.off - mark else state.off + mark)
+    } else {
+        state.copy(on = if (mark in state.on) state.on - mark else state.on + mark)
+    }
+}
+
+/** Whether a toolbar button should look pressed. */
+fun isFormatOn(state: EditState, mark: String): Boolean =
+    mark !in state.off && (mark in activeFormats(state.value) || mark in state.on)

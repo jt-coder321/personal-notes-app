@@ -506,13 +506,10 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     BasicTextField(
                         value = bodyField,
                         onValueChange = { value ->
-                            val fixed = fixHiddenDelete(bodyField, value)
-                            val applied = applyPending(bodyField, fixed, pendingOn, pendingOff)
-                            val next = applied ?: continueList(bodyField, fixed)
-                            if (applied != null || (fixed.text == bodyField.text && fixed.selection != bodyField.selection)) {
-                                pendingOn = emptySet()
-                                pendingOff = emptySet()
-                            }
+                            val result = processEdit(EditState(bodyField, pendingOn, pendingOff), value)
+                            val next = result.value
+                            pendingOn = result.on
+                            pendingOff = result.off
                             bodyField = next
                             if (next.text != note.body) edit(note.copy(body = next.text))
                         },
@@ -596,15 +593,17 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         bodyField = changed
                         edit(note.copy(body = changed.text))
                     }
-                    val activeNow = activeFormats(bodyField)
-                    fun isOn(mark: String) = mark !in pendingOff && (mark in activeNow || mark in pendingOn)
+                    val editState = EditState(bodyField, pendingOn, pendingOff)
+                    fun isOn(mark: String) = isFormatOn(editState, mark)
                     fun toggleMark(mark: String) {
-                        if (!bodyField.selection.collapsed) {
-                            format { toggleWrap(it, mark) }
-                        } else if (mark in activeNow) {
-                            pendingOff = if (mark in pendingOff) pendingOff - mark else pendingOff + mark
+                        val result = toggleMarkState(editState, mark)
+                        pendingOn = result.on
+                        pendingOff = result.off
+                        if (result.value.text != bodyField.text) {
+                            bodyField = result.value
+                            edit(note.copy(body = result.value.text))
                         } else {
-                            pendingOn = if (mark in pendingOn) pendingOn - mark else pendingOn + mark
+                            bodyField = result.value
                         }
                     }
                     Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
