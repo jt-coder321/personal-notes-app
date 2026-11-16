@@ -21,6 +21,7 @@ import com.jt.notes.data.MIGRATION_2_3
 import com.jt.notes.data.MIGRATION_3_4
 import com.jt.notes.data.MIGRATION_4_5
 import com.jt.notes.data.MIGRATION_5_6
+import com.jt.notes.data.MIGRATION_6_7
 import com.jt.notes.data.Note
 import com.jt.notes.data.NoteExport
 import com.jt.notes.data.NoteLabel
