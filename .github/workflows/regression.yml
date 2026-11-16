@@ -47,7 +47,7 @@ jobs:
       - name: Fetch the previous build for the upgrade test
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run download 43760329002 -n personal-notes-apk -D old || echo "previous build not available"
+        run: gh run download 43911525163 -n personal-notes-apk -D old || echo "previous build not available"
 
       - name: Enable KVM
         run: |
