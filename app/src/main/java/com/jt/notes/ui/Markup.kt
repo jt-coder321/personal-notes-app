@@ -117,6 +117,14 @@ class MarkupTransformation(private val dim: Color) : VisualTransformation {
         val styled = styleMarkup(t, dim)
         val hidden = markupHidden(t)
         val subst = markupSubstitutions(t)
+        val prefixEnds = HashSet<Int>().also { ends ->
+            var start = 0
+            for (line in t.split("\n")) {
+                val n = when { line.startsWith("## ") -> 3; line.startsWith("# ") -> 2; else -> 0 }
+                if (n > 0) ends.add(start + n)
+                start += line.length + 1
+            }
+        }
         val visibleIndex = ArrayList<Int>()
         val originalToTransformed = IntArray(t.length + 1)
         val out = buildAnnotatedString {
@@ -142,7 +150,13 @@ class MarkupTransformation(private val dim: Color) : VisualTransformation {
         visibleIndex.add(t.length)
         val mapping = object : OffsetMapping {
             override fun originalToTransformed(offset: Int) = originalToTransformed[offset.coerceIn(0, t.length)]
-            override fun transformedToOriginal(offset: Int) = visibleIndex[offset.coerceIn(0, visibleIndex.size - 1)]
+            override fun transformedToOriginal(offset: Int): Int {
+                val j = offset.coerceIn(0, visibleIndex.size - 1)
+                val right = visibleIndex[j]
+                // After a heading marker the cursor belongs to the heading text; elsewhere it stays inside
+                // the formatted word, so typing at the end of bold text continues the bold.
+                return if (j == 0 || right in prefixEnds) right else visibleIndex[j - 1] + 1
+            }
         }
         return TransformedText(out, mapping)
     }
@@ -256,7 +270,7 @@ fun toggleWrap(value: TextFieldValue, mark: String): TextFieldValue {
         TextFieldValue(text.substring(0, a) + inner + text.substring(b), TextRange(a, a + inner.length))
     } else {
         val newText = text.substring(0, a) + mark + selected + mark + text.substring(b)
-        TextFieldValue(newText, TextRange(a, b + 2 * n))
+        TextFieldValue(newText, TextRange(a + n, b + n))
     }
 }
 
@@ -305,4 +319,51 @@ fun detectLinks(text: String): List<DetectedLink> {
         .filter { number -> number.count { it.isDigit() } in 7..15 }
         .forEach { found.add(DetectedLink(LinkKind.PHONE, it)) }
     return found.take(8)
+}
+
+
+// ----- toolbar state -----
+
+/** Which formats apply at the cursor or selection: "**", "*", "~~" and the line markers "# ", "## ", "- ", "> ", "1. ". */
+fun activeFormats(value: TextFieldValue): Set<String> {
+    val t = value.text
+    val a = value.selection.min.coerceIn(0, t.length)
+    val b = value.selection.max.coerceIn(0, t.length)
+    val result = HashSet<String>()
+    BOLD.findAll(t).forEach { if (a >= it.range.first + 2 && b <= it.range.last - 1) result.add("**") }
+    STRIKE.findAll(t).forEach { if (a >= it.range.first + 2 && b <= it.range.last - 1) result.add("~~") }
+    ITALIC.findAll(t).forEach { if (a >= it.range.first + 1 && b <= it.range.last) result.add("*") }
+    val rest = t.substring(lineStartOf(t, a))
+    when {
+        rest.startsWith("## ") -> result.add("## ")
+        rest.startsWith("# ") -> result.add("# ")
+        rest.startsWith("- ") -> result.add("- ")
+        rest.startsWith("> ") -> result.add("> ")
+        NUMBERED.containsMatchIn(rest) -> result.add("1. ")
+    }
+    return result
+}
+
+/**
+ * A format button pressed with no text selected switches the format on (or off) for the next thing typed,
+ * instead of putting symbols in the note. This wraps that typed text.
+ */
+fun applyPending(old: TextFieldValue, new: TextFieldValue, on: Set<String>, off: Set<String>): TextFieldValue? {
+    if (on.isEmpty() && off.isEmpty()) return null
+    if (!old.selection.collapsed || !new.selection.collapsed) return null
+    val c = old.selection.start
+    val grew = new.text.length - old.text.length
+    if (grew <= 0 || c > old.text.length || new.selection.start != c + grew) return null
+    val inserted = new.text.substring(c, c + grew)
+    if (new.text != old.text.substring(0, c) + inserted + old.text.substring(c)) return null
+    var pos = c
+    var pre = ""
+    var post = ""
+    for (m in off) {
+        if (old.text.startsWith(m, pos)) pos += m.length else { pre += m; post = m + post }
+    }
+    val opens = on.joinToString("")
+    val closes = on.reversed().joinToString("")
+    val text = old.text.substring(0, pos) + pre + opens + inserted + closes + post + old.text.substring(pos)
+    return TextFieldValue(text, TextRange(pos + pre.length + opens.length + inserted.length))
 }

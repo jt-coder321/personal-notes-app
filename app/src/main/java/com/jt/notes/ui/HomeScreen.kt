@@ -277,6 +277,7 @@ fun HomeScreen(
                                 }
                                 HorizontalDivider()
                                 MenuRow("Trash", Icons.Outlined.Delete) { menuOpen = false; vm.filter.value = Filter.Trash }
+                                MenuRow("Version " + appVersion(), Icons.Outlined.Info) { menuOpen = false }
                             }
                         }
                     }
@@ -875,5 +876,13 @@ fun LabelChip(name: String) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
         )
+    }
+}
+
+@Composable
+private fun appVersion(): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
 }

@@ -92,6 +92,8 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     var loaded by remember(noteId) { mutableStateOf<Note?>(null) }
     var original by remember(noteId) { mutableStateOf<Note?>(null) }
     var bodyField by remember(noteId) { mutableStateOf(TextFieldValue("")) }
+    var pendingOn by remember(noteId) { mutableStateOf(setOf<String>()) }
+    var pendingOff by remember(noteId) { mutableStateOf(setOf<String>()) }
     LaunchedEffect(noteId) {
         val fromDb = vm.getNote(noteId)
         if (fromDb == null) {
@@ -504,7 +506,13 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     BasicTextField(
                         value = bodyField,
                         onValueChange = { value ->
-                            val next = continueList(bodyField, fixHiddenDelete(bodyField, value))
+                            val fixed = fixHiddenDelete(bodyField, value)
+                            val applied = applyPending(bodyField, fixed, pendingOn, pendingOff)
+                            val next = applied ?: continueList(bodyField, fixed)
+                            if (applied != null || (fixed.text == bodyField.text && fixed.selection != bodyField.selection)) {
+                                pendingOn = emptySet()
+                                pendingOff = emptySet()
+                            }
                             bodyField = next
                             if (next.text != note.body) edit(note.copy(body = next.text))
                         },
@@ -588,29 +596,40 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         bodyField = changed
                         edit(note.copy(body = changed.text))
                     }
+                    val activeNow = activeFormats(bodyField)
+                    fun isOn(mark: String) = mark !in pendingOff && (mark in activeNow || mark in pendingOn)
+                    fun toggleMark(mark: String) {
+                        if (!bodyField.selection.collapsed) {
+                            format { toggleWrap(it, mark) }
+                        } else if (mark in activeNow) {
+                            pendingOff = if (mark in pendingOff) pendingOff - mark else pendingOff + mark
+                        } else {
+                            pendingOn = if (mark in pendingOn) pendingOn - mark else pendingOn + mark
+                        }
+                    }
                     Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
-                        IconButton(onClick = { format { toggleLinePrefix(it, "# ") } }) {
+                        FormatButton(isOn("# "), p.accent, { format { toggleLinePrefix(it, "# ") } }) {
                             Icon(Icons.Outlined.Title, contentDescription = "Heading")
                         }
-                        IconButton(onClick = { format { toggleLinePrefix(it, "## ") } }) {
+                        FormatButton(isOn("## "), p.accent, { format { toggleLinePrefix(it, "## ") } }) {
                             Text("H2", style = MaterialTheme.typography.labelLarge)
                         }
-                        IconButton(onClick = { format { toggleBold(it) } }) {
+                        FormatButton(isOn("**"), p.accent, { toggleMark("**") }) {
                             Icon(Icons.Outlined.FormatBold, contentDescription = "Bold")
                         }
-                        IconButton(onClick = { format { toggleItalic(it) } }) {
+                        FormatButton(isOn("*"), p.accent, { toggleMark("*") }) {
                             Icon(Icons.Outlined.FormatItalic, contentDescription = "Italic")
                         }
-                        IconButton(onClick = { format { toggleStrike(it) } }) {
+                        FormatButton(isOn("~~"), p.accent, { toggleMark("~~") }) {
                             Icon(Icons.Outlined.FormatStrikethrough, contentDescription = "Strikethrough")
                         }
-                        IconButton(onClick = { format { toggleLinePrefix(it, "- ") } }) {
+                        FormatButton(isOn("- "), p.accent, { format { toggleLinePrefix(it, "- ") } }) {
                             Icon(Icons.Outlined.FormatListBulleted, contentDescription = "Bullet list")
                         }
-                        IconButton(onClick = { format { toggleLinePrefix(it, "1. ") } }) {
+                        FormatButton(isOn("1. "), p.accent, { format { toggleLinePrefix(it, "1. ") } }) {
                             Icon(Icons.Outlined.FormatListNumbered, contentDescription = "Numbered list")
                         }
-                        IconButton(onClick = { format { toggleLinePrefix(it, "> ") } }) {
+                        FormatButton(isOn("> "), p.accent, { format { toggleLinePrefix(it, "> ") } }) {
                             Icon(Icons.Outlined.FormatQuote, contentDescription = "Quote")
                         }
                     }
@@ -958,4 +977,15 @@ private fun ChecklistEditor(body: String, focusFirst: Boolean, onBodyChange: (St
             }
         }
     }
+}
+
+@Composable
+private fun FormatButton(active: Boolean, accent: Color, onClick: () -> Unit, content: @Composable () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        colors = IconButtonDefaults.iconButtonColors(
+            containerColor = if (active) accent.copy(alpha = 0.22f) else Color.Transparent,
+            contentColor = if (active) accent else LocalContentColor.current,
+        ),
+    ) { content() }
 }

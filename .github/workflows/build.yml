@@ -24,19 +24,25 @@ jobs:
       - name: Build optimized APK
         run: ./gradlew assembleRelease --stacktrace
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk personal-notes.apk
+      - name: Name the APK with its version
+        id: ver
+        run: |
+          V=$(cat VERSION | tr -d '[:space:]')
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+          cp app/build/outputs/apk/release/app-release.apk "personal-notes-v$V.apk"
 
       - uses: actions/upload-artifact@v4
         with:
           name: personal-notes-apk
-          path: personal-notes.apk
+          path: personal-notes-v*.apk
 
-      - name: Publish to the "latest" release
+      - name: Publish the versioned release and update "latest"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          V=${{ steps.ver.outputs.v }}
+          NOTES="Version $V. Built from ${{ github.sha }}. Install over the previous version; your notes are kept."
+          gh release delete "v$V" --yes --cleanup-tag || true
+          gh release create "v$V" "personal-notes-v$V.apk" --title "v$V" --notes "$NOTES"
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest personal-notes.apk \
-            --title "Latest build (#${{ github.run_number }})" \
-            --notes "Built from ${{ github.sha }}. Install over the previous version; your notes are kept."
+          gh release create latest "personal-notes-v$V.apk" --title "Latest: v$V" --notes "$NOTES"
