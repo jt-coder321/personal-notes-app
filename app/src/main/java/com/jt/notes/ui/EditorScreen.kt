@@ -673,7 +673,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         onClick = { leave(note) },
                         shape = CircleShape,
                         color = p.accent,
-                        contentColor = Color.White,
+                        contentColor = p.onAccent,
                         modifier = Modifier.height(44.dp),
                     ) {
                         Box(Modifier.padding(horizontal = 18.dp), contentAlignment = Alignment.Center) {

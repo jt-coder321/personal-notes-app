@@ -71,6 +71,13 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         Sort.entries.firstOrNull { it.name == prefs.getString("sort", null) } ?: Sort.EDITED
     )
     val lockEnabled = MutableStateFlow(prefs.getBoolean("lock", false))
+    val theme = MutableStateFlow(prefs.getString("theme", "classic") ?: "classic")
+
+    fun setTheme(id: String) {
+        prefs.edit().putString("theme", id).apply()
+        theme.value = id
+    }
+
     val autoBackupFolder = MutableStateFlow(prefs.getString(AutoBackup.PREF_FOLDER, null))
     val undo = MutableStateFlow<Undo?>(null)
 

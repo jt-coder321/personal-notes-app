@@ -89,7 +89,8 @@ class MainActivity : FragmentActivity() {
         locked = lockEnabled() && !unlocked
         if (savedInstanceState == null) handleIntent(intent)
         setContent {
-            NotesTheme {
+            val themeId by vm.theme.collectAsStateWithLifecycle()
+            NotesTheme(themeId) {
                 var crashText by rememberSaveable { mutableStateOf(lastCrash) }
                 crashText?.let { text ->
                     androidx.compose.material3.AlertDialog(

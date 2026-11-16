@@ -22,6 +22,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.jt.notes.R
 
 /** The app's own colors: a quiet neutral surface with one bright action color. */
@@ -35,6 +38,13 @@ data class Palette(
     val onBar: Color,
     val onBarMuted: Color,
     val dark: Boolean,
+    /** Text and icons on top of the accent color. */
+    val onAccent: Color = Color.White,
+    val cardRadius: Dp = 24.dp,
+    val border: Dp = 0.dp,
+    val borderColor: Color = Color.Transparent,
+    val display: FontFamily? = null,
+    val body: FontFamily? = null,
 )
 
 private val LightPalette = Palette(
@@ -63,6 +73,39 @@ private val DarkPalette = Palette(
 
 val LocalPalette = staticCompositionLocalOf { LightPalette }
 
+class ThemeSpec(val id: String, val name: String, val palette: Palette?)
+
+/** The themes people can pick. "Classic" follows the phone's light and dark setting. */
+object Themes {
+    private fun c(v: Long) = Color(v)
+    val classicPreview = LightPalette
+    val all: List<ThemeSpec> = listOf(
+        ThemeSpec("classic", "Classic (follows phone)", null),
+        ThemeSpec("aurora", "Aurora glass", Palette(c(0xFF11143A), c(0xFF1F2354), c(0xFFFFFFFF), c(0xFFB9C0E6), c(0xFF7DF9FF), c(0xFF2A2F6B), c(0xFFFFFFFF), c(0xFFB9C0E6), true,
+            onAccent = c(0xFF0B1020), cardRadius = 24.dp, border = 1.dp, borderColor = c(0x33FFFFFF))),
+        ThemeSpec("paper", "Paper and ink", Palette(c(0xFFF4EFE6), c(0xFFFBF8F1), c(0xFF1F2A44), c(0xFF6D6452), c(0xFF1F3A5F), c(0xFF1F3A5F), c(0xFFF4EFE6), c(0xFFC8D2E4), false,
+            cardRadius = 8.dp, display = FontFamily.Serif, body = FontFamily.Serif)),
+        ThemeSpec("brutalist", "Neo-brutalist", Palette(c(0xFFFFF4D6), c(0xFFFFFFFF), c(0xFF000000), c(0xFF333333), c(0xFFFF6B6B), c(0xFF000000), c(0xFFFFFFFF), c(0xFFFFD93D), false,
+            onAccent = c(0xFF000000), cardRadius = 14.dp, border = 3.dp, borderColor = c(0xFF000000))),
+        ThemeSpec("bento", "Bento tiles", Palette(c(0xFFEEF1F6), c(0xFFFFFFFF), c(0xFF14171F), c(0xFF5F6673), c(0xFF14171F), c(0xFF14171F), c(0xFFFFFFFF), c(0xFF9CA3AF), false,
+            cardRadius = 28.dp)),
+        ThemeSpec("terminal", "Terminal", Palette(c(0xFF0D1117), c(0xFF161B22), c(0xFFE6EDF3), c(0xFF9AA4AF), c(0xFF3FB950), c(0xFF161B22), c(0xFFE6EDF3), c(0xFF9AA4AF), true,
+            onAccent = c(0xFF0D1117), cardRadius = 8.dp, border = 1.dp, borderColor = c(0xFF30363D), display = FontFamily.Monospace, body = FontFamily.Monospace)),
+        ThemeSpec("sunrise", "Sunrise", Palette(c(0xFFFFF6F4), c(0xFFFFFFFF), c(0xFF2B2330), c(0xFF7A6F83), c(0xFFE63E6D), c(0xFF2B2330), c(0xFFFFFFFF), c(0xFFD9CFE0), false,
+            cardRadius = 22.dp)),
+        ThemeSpec("swiss", "Swiss type", Palette(c(0xFFFFFFFF), c(0xFFFFFFFF), c(0xFF111111), c(0xFF555555), c(0xFFE4002B), c(0xFF111111), c(0xFFFFFFFF), c(0xFFC9C9C9), false,
+            cardRadius = 0.dp, border = 1.dp, borderColor = c(0xFF111111))),
+        ThemeSpec("board", "Sticky board", Palette(c(0xFFC9A27A), c(0xFFFFF8D6), c(0xFF2A2118), c(0xFF4F4030), c(0xFFB03A2E), c(0xFF2A2118), c(0xFFF6E7D3), c(0xFFD9C3A5), false,
+            cardRadius = 4.dp)),
+        ThemeSpec("timeline", "Violet", Palette(c(0xFFF6F5FB), c(0xFFFFFFFF), c(0xFF14102E), c(0xFF6A6682), c(0xFF6C4CF1), c(0xFF1B1740), c(0xFFFFFFFF), c(0xFFC9C4EE), false,
+            cardRadius = 18.dp)),
+        ThemeSpec("focus", "Focus", Palette(c(0xFF111114), c(0xFF1E1E25), c(0xFFFFFFFF), c(0xFF9B9BA6), c(0xFFFFE27A), c(0xFF26262F), c(0xFFFFFFFF), c(0xFFB8B8C2), true,
+            onAccent = c(0xFF1B1B20), cardRadius = 32.dp)),
+    )
+
+    fun find(id: String?): ThemeSpec = all.firstOrNull { it.id == id } ?: all[0]
+}
+
 private fun variable(resId: Int, weight: FontWeight) = Font(
     resId = resId,
     weight = weight,
@@ -83,10 +126,10 @@ val Body = FontFamily(
     variable(R.font.inter, FontWeight.SemiBold),
 )
 
-private fun appTypography(): Typography {
+private fun appTypography(displayFamily: FontFamily, bodyFamily: FontFamily): Typography {
     val base = Typography()
-    fun TextStyle.body() = copy(fontFamily = Body)
-    fun TextStyle.display() = copy(fontFamily = Display)
+    fun TextStyle.body() = copy(fontFamily = bodyFamily)
+    fun TextStyle.display() = copy(fontFamily = displayFamily)
     return Typography(
         displayLarge = base.displayLarge.display(),
         displayMedium = base.displayMedium.display(),
@@ -107,10 +150,29 @@ private fun appTypography(): Typography {
 }
 
 @Composable
-fun NotesTheme(content: @Composable () -> Unit) {
-    val p = if (isSystemInDarkTheme()) DarkPalette else LightPalette
-    val scheme = if (p.dark) {
-        darkColorScheme(
+fun NotesTheme(themeId: String = "classic", content: @Composable () -> Unit) {
+    val spec = Themes.find(themeId)
+    val system = isSystemInDarkTheme()
+    val chosen = spec.palette
+    val p = chosen ?: if (system) DarkPalette else LightPalette
+    val scheme = when {
+        chosen != null -> {
+            val base = if (chosen.dark) darkColorScheme() else lightColorScheme()
+            base.copy(
+                primary = chosen.accent,
+                onPrimary = chosen.onAccent,
+                background = chosen.ground,
+                onBackground = chosen.ink,
+                surface = chosen.surface,
+                onSurface = chosen.ink,
+                onSurfaceVariant = chosen.muted,
+                surfaceContainer = chosen.surface,
+                surfaceContainerHigh = chosen.surface,
+                surfaceContainerHighest = chosen.ink.copy(alpha = 0.08f).compositeOver(chosen.surface),
+                outlineVariant = chosen.ink.copy(alpha = 0.18f).compositeOver(chosen.surface),
+            )
+        }
+        p.dark -> darkColorScheme(
             primary = Color(0xFF9DB0FF),
             onPrimary = Color(0xFF0B0D12),
             background = p.ground,
@@ -123,8 +185,7 @@ fun NotesTheme(content: @Composable () -> Unit) {
             surfaceContainerHighest = Color(0xFF262C38),
             outlineVariant = Color(0xFF2E3542),
         )
-    } else {
-        lightColorScheme(
+        else -> lightColorScheme(
             primary = p.accent,
             onPrimary = Color.White,
             background = p.ground,
@@ -139,7 +200,7 @@ fun NotesTheme(content: @Composable () -> Unit) {
         )
     }
     CompositionLocalProvider(LocalPalette provides p) {
-        MaterialTheme(colorScheme = scheme, typography = appTypography(), content = content)
+        MaterialTheme(colorScheme = scheme, typography = appTypography(p.display ?: Display, p.body ?: Body), content = content)
     }
 }
 

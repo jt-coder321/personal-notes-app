@@ -16,6 +16,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
@@ -82,6 +84,8 @@ fun HomeScreen(
     var showBackupDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showAutoBackupDialog by remember { mutableStateOf(false) }
+    var showThemeDialog by remember { mutableStateOf(false) }
+    val themeId by vm.theme.collectAsStateWithLifecycle()
     var exportPassword by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf(setOf<Long>()) }
 
@@ -277,6 +281,7 @@ fun HomeScreen(
                                 }
                                 HorizontalDivider()
                                 MenuRow("Trash", Icons.Outlined.Delete) { menuOpen = false; vm.filter.value = Filter.Trash }
+                                MenuRow("Theme", Icons.Outlined.Palette) { menuOpen = false; showThemeDialog = true }
                                 MenuRow("Version " + appVersion(), Icons.Outlined.Info) { menuOpen = false }
                             }
                         }
@@ -433,6 +438,43 @@ fun HomeScreen(
                 showPasswordDialog = false
                 vm.finishImport(password) { toast(it) }
             },
+        )
+    }
+    if (showThemeDialog) {
+        AlertDialog(
+            onDismissRequest = { showThemeDialog = false },
+            title = { Text("Theme") },
+            text = {
+                Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                    Themes.all.forEach { spec ->
+                        val sw = spec.palette ?: Themes.classicPreview
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { vm.setTheme(spec.id); showThemeDialog = false }
+                                .heightIn(min = 52.dp)
+                                .padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
+                                listOf(sw.ground, sw.surface, sw.accent).forEach { color ->
+                                    Box(
+                                        Modifier
+                                            .size(26.dp)
+                                            .background(color, CircleShape)
+                                            .border(1.dp, Color(0x44808080), CircleShape),
+                                    )
+                                }
+                            }
+                            Text(spec.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                            if (spec.id == themeId) Text("\u2713", style = MaterialTheme.typography.titleMedium)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showThemeDialog = false }) { Text("Close") } },
         )
     }
     if (showAutoBackupDialog) {
@@ -708,7 +750,7 @@ private fun CaptureBar(onNote: () -> Unit, onChecklist: () -> Unit, onSpeak: () 
                 onClick = onNote,
                 shape = CircleShape,
                 color = p.accent,
-                contentColor = Color.White,
+                contentColor = p.onAccent,
                 modifier = Modifier.size(48.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -730,10 +772,11 @@ private fun NoteCard(
     val p = LocalPalette.current
     val note = item.note
     val background = noteBackground(note.color)
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(p.cardRadius)
     val border = when {
         checked -> BorderStroke(3.dp, p.ink)
         open -> BorderStroke(2.dp, p.accent)
+        p.border > 0.dp -> BorderStroke(p.border, p.borderColor)
         else -> null
     }
 
