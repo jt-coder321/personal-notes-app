@@ -443,7 +443,14 @@ fun HomeScreen(
                                         open = item.note.id == selectedId,
                                         checked = item.note.id in selection,
                                         onClick = { onCardClick(item) },
-                                        onLongClick = { toggle(item.note.id) },
+                                        onLongClick = {
+                                            if (canReorder) {
+                                                if (arrangeList == null) {
+                                                    arrangeList = notes
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                }
+                                            } else toggle(item.note.id)
+                                        },
                                         jiggle = arranging,
                                         reorderable = canReorder,
                                         dragging = isDragging,
@@ -474,7 +481,14 @@ fun HomeScreen(
                                     open = item.note.id == selectedId,
                                     checked = item.note.id in selection,
                                     onClick = { onCardClick(item) },
-                                    onLongClick = { toggle(item.note.id) },
+                                    onLongClick = {
+                                        if (canReorder) {
+                                            if (arrangeList == null) {
+                                                arrangeList = notes
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            }
+                                        } else toggle(item.note.id)
+                                    },
                                     jiggle = arranging,
                                     reorderable = canReorder,
                                     dragging = isDragging,
@@ -918,7 +932,7 @@ private fun NoteCard(
                 }
             }
             .clip(shape)
-            .then(if (reorderable) handle.clickable(onClick = onClick) else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
+            .then(if (reorderable) handle.combinedClickable(onClick = onClick, onLongClick = onLongClick) else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
     ) {
         Column {
             item.images.firstOrNull()?.let { name ->
