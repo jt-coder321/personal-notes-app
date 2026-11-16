@@ -8,7 +8,7 @@ import android.media.ExifInterface
 import android.net.Uri
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.TextRecognizerOptions
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 /** Reads the text out of a picture with on-device ML Kit text recognition. */
 object Ocr {

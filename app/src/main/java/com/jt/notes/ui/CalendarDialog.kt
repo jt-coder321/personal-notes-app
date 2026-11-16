@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.item
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -171,7 +170,7 @@ fun CalendarDialog(notes: List<Note>, onOpen: (Long) -> Unit, onDismiss: () -> U
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     if (dayNotes.isEmpty()) {
-                        item {
+                        items(1) {
                             Text(
                                 "Nothing on this day.",
                                 style = MaterialTheme.typography.bodyMedium,
