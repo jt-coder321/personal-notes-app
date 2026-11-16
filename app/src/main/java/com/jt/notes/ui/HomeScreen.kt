@@ -334,7 +334,7 @@ fun HomeScreen(
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 16.dp),
+                    modifier = Modifier.padding(top = 16.dp, bottom = 12.dp),
                 ) {
                     item(key = "all") {
                         FilterChipPill("All", filter == Filter.Notes) { vm.filter.value = Filter.Notes }
@@ -364,12 +364,20 @@ fun HomeScreen(
                     Surface(
                         color = p.accent.copy(alpha = 0.14f),
                         contentColor = p.ink,
-                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                     ) {
                         Row(
-                            Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                            Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            Icon(
+                                if (arranging) Icons.Outlined.DragIndicator else Icons.Outlined.Check,
+                                contentDescription = null,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
                             Text(
                                 if (arranging) "Drag a note where you want it. Your order is saved." else "Tap the notes you want to select.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -1073,4 +1081,5 @@ private fun appVersion(): String {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
 }
+
 
