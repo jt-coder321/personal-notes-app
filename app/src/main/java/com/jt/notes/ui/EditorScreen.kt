@@ -91,16 +91,15 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
 
     var loaded by remember(noteId) { mutableStateOf<Note?>(null) }
     var original by remember(noteId) { mutableStateOf<Note?>(null) }
-    var bodyField by remember(noteId) { mutableStateOf(TextFieldValue("")) }
-    var pendingOn by remember(noteId) { mutableStateOf(setOf<String>()) }
-    var pendingOff by remember(noteId) { mutableStateOf(setOf<String>()) }
+    var rich by remember(noteId) { mutableStateOf(Rich()) }
+    var composing by remember(noteId) { mutableStateOf<TextRange?>(null) }
     LaunchedEffect(noteId) {
         val fromDb = vm.getNote(noteId)
         if (fromDb == null) {
             onClose()
         } else {
             original = fromDb
-            bodyField = TextFieldValue(fromDb.body, TextRange(fromDb.body.length))
+            rich = richFromMarkdown(fromDb.body)
             loaded = fromDb
         }
     }
@@ -136,7 +135,8 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
 
     /** Replaces the whole body, keeping the text field in step. */
     fun replaceContent(changed: Note) {
-        bodyField = TextFieldValue(changed.body, TextRange(changed.body.length))
+        rich = richFromMarkdown(changed.body)
+        composing = null
         edit(changed)
     }
 
@@ -502,16 +502,14 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 } else {
                     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 28.sp)
                     val dim = p.ink.copy(alpha = 0.35f)
-                    val transformation = remember(dim) { MarkupTransformation(dim) }
                     BasicTextField(
-                        value = bodyField,
+                        value = TextFieldValue(richAnnotated(rich), rich.selection, composing),
                         onValueChange = { value ->
-                            val result = processEdit(EditState(bodyField, pendingOn, pendingOff), value)
-                            val next = result.value
-                            pendingOn = result.on
-                            pendingOff = result.off
-                            bodyField = next
-                            if (next.text != note.body) edit(note.copy(body = next.text))
+                            val next = richEdit(rich, value.text, value.selection)
+                            composing = if (next.text == value.text) value.composition else null
+                            rich = next
+                            val markdown = richToMarkdown(next)
+                            if (markdown != note.body) edit(note.copy(body = markdown))
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -520,10 +518,9 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         textStyle = bodyStyle.copy(color = p.ink),
                         cursorBrush = SolidColor(p.accent),
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                        visualTransformation = transformation,
                         decorationBox = { inner ->
                             Box {
-                                if (bodyField.text.isEmpty()) {
+                                if (rich.text.isEmpty()) {
                                     Text("Start writing", style = bodyStyle, color = p.ink.copy(alpha = 0.45f))
                                 }
                                 inner()
@@ -588,47 +585,36 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (!note.isChecklist) {
-                    fun format(change: (TextFieldValue) -> TextFieldValue) {
-                        val changed = change(bodyField)
-                        bodyField = changed
-                        edit(note.copy(body = changed.text))
+                    fun apply(next: Rich) {
+                        rich = next
+                        composing = null
+                        val markdown = richToMarkdown(next)
+                        if (markdown != note.body) edit(note.copy(body = markdown))
                     }
-                    val editState = EditState(bodyField, pendingOn, pendingOff)
-                    fun isOn(mark: String) = isFormatOn(editState, mark)
-                    fun toggleMark(mark: String) {
-                        val result = toggleMarkState(editState, mark)
-                        pendingOn = result.on
-                        pendingOff = result.off
-                        if (result.value.text != bodyField.text) {
-                            bodyField = result.value
-                            edit(note.copy(body = result.value.text))
-                        } else {
-                            bodyField = result.value
-                        }
-                    }
+                    val marker = lineMarker(rich)
                     Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
-                        FormatButton(isOn("# "), p.accent, { format { toggleLinePrefix(it, "# ") } }) {
+                        FormatButton(isHeadingOn(rich, Fmt.H1), p.accent, { apply(toggleHeading(rich, Fmt.H1)) }) {
                             Icon(Icons.Outlined.Title, contentDescription = "Heading")
                         }
-                        FormatButton(isOn("## "), p.accent, { format { toggleLinePrefix(it, "## ") } }) {
+                        FormatButton(isHeadingOn(rich, Fmt.H2), p.accent, { apply(toggleHeading(rich, Fmt.H2)) }) {
                             Text("H2", style = MaterialTheme.typography.labelLarge)
                         }
-                        FormatButton(isOn("**"), p.accent, { toggleMark("**") }) {
+                        FormatButton(isInlineOn(rich, Fmt.BOLD), p.accent, { apply(toggleInline(rich, Fmt.BOLD)) }) {
                             Icon(Icons.Outlined.FormatBold, contentDescription = "Bold")
                         }
-                        FormatButton(isOn("*"), p.accent, { toggleMark("*") }) {
+                        FormatButton(isInlineOn(rich, Fmt.ITALIC), p.accent, { apply(toggleInline(rich, Fmt.ITALIC)) }) {
                             Icon(Icons.Outlined.FormatItalic, contentDescription = "Italic")
                         }
-                        FormatButton(isOn("~~"), p.accent, { toggleMark("~~") }) {
+                        FormatButton(isInlineOn(rich, Fmt.STRIKE), p.accent, { apply(toggleInline(rich, Fmt.STRIKE)) }) {
                             Icon(Icons.Outlined.FormatStrikethrough, contentDescription = "Strikethrough")
                         }
-                        FormatButton(isOn("- "), p.accent, { format { toggleLinePrefix(it, "- ") } }) {
+                        FormatButton(marker == BULLET_MARKER, p.accent, { apply(togglePrefix(rich, BULLET_MARKER)) }) {
                             Icon(Icons.Outlined.FormatListBulleted, contentDescription = "Bullet list")
                         }
-                        FormatButton(isOn("1. "), p.accent, { format { toggleLinePrefix(it, "1. ") } }) {
+                        FormatButton(marker == NUMBER_MARKER, p.accent, { apply(togglePrefix(rich, NUMBER_MARKER)) }) {
                             Icon(Icons.Outlined.FormatListNumbered, contentDescription = "Numbered list")
                         }
-                        FormatButton(isOn("> "), p.accent, { format { toggleLinePrefix(it, "> ") } }) {
+                        FormatButton(marker == QUOTE_MARKER, p.accent, { apply(togglePrefix(rich, QUOTE_MARKER)) }) {
                             Icon(Icons.Outlined.FormatQuote, contentDescription = "Quote")
                         }
                     }
