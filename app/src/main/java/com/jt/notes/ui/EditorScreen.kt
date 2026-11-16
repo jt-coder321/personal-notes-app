@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -1227,18 +1228,12 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     Modifier.padding(start = 12.dp, end = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        NoteColors.indices.forEach { index ->
-                            ColorDot(
-                                index = index,
-                                selected = index == note.color || (index == 0 && note.color !in NoteColors.indices),
-                                onClick = { edit(note.copy(color = index)) },
-                            )
-                        }
-                    }
+                    ColorRow(
+                        selected = note.color,
+                        barColor = p.bar,
+                        onSelect = { edit(note.copy(color = it)) },
+                        modifier = Modifier.weight(1f),
+                    )
                     IconButton(onClick = { showLabels = true }) {
                         Icon(Icons.AutoMirrored.Outlined.Label, contentDescription = "Labels")
                     }
@@ -1435,6 +1430,46 @@ private fun LockGate(
             )
             Text("This note is locked", style = MaterialTheme.typography.bodyMedium, color = p.muted)
             androidx.compose.material3.Button(onClick = onUnlock) { Text("Unlock") }
+        }
+    }
+}
+
+/** The note color choices. Edge fades show the row scrolls: the trailing fade
+ * is visible while more colors lie beyond the visible ones, and the leading
+ * fade appears once the row is scrolled. Taps pass through the fades to the
+ * dots beneath them. */
+@Composable
+private fun ColorRow(
+    selected: Int,
+    barColor: Color,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scroll = rememberScrollState()
+    Box(modifier) {
+        Row(
+            Modifier.horizontalScroll(scroll),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            NoteColors.indices.forEach { index ->
+                ColorDot(
+                    index = index,
+                    selected = index == selected || (index == 0 && selected !in NoteColors.indices),
+                    onClick = { onSelect(index) },
+                )
+            }
+        }
+        if (scroll.value > 0) {
+            Box(
+                Modifier.align(Alignment.CenterStart).width(28.dp).fillMaxHeight()
+                    .background(Brush.horizontalGradient(listOf(barColor, Color.Transparent)))
+            )
+        }
+        if (scroll.value < scroll.maxValue) {
+            Box(
+                Modifier.align(Alignment.CenterEnd).width(28.dp).fillMaxHeight()
+                    .background(Brush.horizontalGradient(listOf(Color.Transparent, barColor)))
+            )
         }
     }
 }
