@@ -103,6 +103,14 @@ fun HomeScreen(
     // Set while the person is dragging notes around: the order being shown.
     var arrangeList by remember { mutableStateOf<List<NoteItem>?>(null) }
     LaunchedEffect(filter, query) { arrangeList = null }
+    // "Select notes" in the menu: taps pick notes for bulk actions. It ends when the picks are cleared.
+    var selectMode by remember { mutableStateOf(false) }
+    var pickedAny by remember { mutableStateOf(false) }
+    LaunchedEffect(selection) {
+        if (selection.isNotEmpty()) pickedAny = true
+        else if (pickedAny) { pickedAny = false; selectMode = false }
+    }
+    LaunchedEffect(filter, query) { selectMode = false }
 
     fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 
@@ -271,11 +279,11 @@ fun HomeScreen(
                                         onClick = { menuOpen = false; vm.setSort(option) },
                                     )
                                 }
-                                if (!inTrash && query.isEmpty() && notes.isNotEmpty()) {
-                                    MenuRow("Arrange notes", Icons.Outlined.DragIndicator) {
+                                if (notes.isNotEmpty()) {
+                                    MenuRow("Select notes", Icons.Outlined.Check) {
                                         menuOpen = false
-                                        selection = emptySet()
-                                        arrangeList = notes
+                                        arrangeList = null
+                                        selectMode = true
                                     }
                                 }
                                 HorizontalDivider()
@@ -344,15 +352,15 @@ fun HomeScreen(
                 val shownNotes = arrangeList ?: notes
                 val arranging = arrangeList != null
                 // Holding a note starts arranging, except in the Trash, in search, or while notes are selected.
-                val canReorder = arranging || (!inTrash && query.isEmpty() && !selecting)
+                val canReorder = arranging || (!inTrash && query.isEmpty() && !selecting && !selectMode)
                 val pinned = if (inTrash) emptyList() else shownNotes.filter { it.note.pinned }
                 val others = if (inTrash) shownNotes else shownNotes.filter { !it.note.pinned }
 
                 val onCardClick: (NoteItem) -> Unit = { item ->
-                    if (selecting || arrangeList != null || item.note.trashedAt != null) toggle(item.note.id) else onOpen(item.note.id)
+                    if (selectMode || selecting || item.note.trashedAt != null) toggle(item.note.id) else onOpen(item.note.id)
                 }
 
-                if (arranging) {
+                if (arranging || (selectMode && !selecting)) {
                     Surface(
                         color = p.accent.copy(alpha = 0.14f),
                         contentColor = p.ink,
@@ -363,11 +371,13 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                "Drag a note where you want it. Tap notes to select them. Your order is saved.",
+                                if (arranging) "Drag a note where you want it. Your order is saved." else "Tap the notes you want to select.",
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.weight(1f),
                             )
-                            TextButton(onClick = { arrangeList = null }) { Text("Done") }
+                            TextButton(onClick = { if (arranging) arrangeList = null else selectMode = false }) {
+                                Text(if (arranging) "Done" else "Cancel")
+                            }
                         }
                     }
                 }

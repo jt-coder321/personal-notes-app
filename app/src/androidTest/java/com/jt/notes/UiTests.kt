@@ -105,12 +105,11 @@ class UiTests {
     }
 
     @Test
-    fun longPress_selectsANote_andArchivesIt() {
+    fun selectFromMenu_selectsANote_andArchivesIt() {
         val title = unique("Archive note")
         createTextNote(title, "Bulk action")
-        // Holding a note starts arranging; tapping a note while arranging selects it.
-        rule.onNodeWithText(title).performTouchInput { longClick() }
-        waitForText("Drag a note where you want it. Tap notes to select them. Your order is saved.")
+        rule.onNodeWithContentDescription("More").performClick()
+        rule.onNodeWithText("Select notes").performClick()
         rule.onNodeWithText(title).performClick()
         waitForText("1 selected")
         rule.onNodeWithContentDescription("Archive").performClick()
@@ -118,5 +117,15 @@ class UiTests {
         // The Archive filter shows it again.
         rule.onNodeWithText("Archive").performClick()
         waitForText(title)
+    }
+
+    @Test
+    fun holdingANote_startsArranging() {
+        val title = unique("Arrange note")
+        createTextNote(title, "Move me")
+        rule.onNodeWithText(title).performTouchInput { longClick() }
+        waitForText("Drag a note where you want it. Your order is saved.")
+        rule.onNodeWithText("Done").performClick()
+        waitForTextGone("Drag a note where you want it. Your order is saved.")
     }
 }
