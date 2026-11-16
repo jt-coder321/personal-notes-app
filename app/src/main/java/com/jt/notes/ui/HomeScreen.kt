@@ -452,7 +452,7 @@ fun HomeScreen(
                                             } else toggle(item.note.id)
                                         },
                                         jiggle = arranging,
-                                        reorderable = canReorder,
+                                        arrange = arranging,
                                         dragging = isDragging,
                                         handle = Modifier.longPressDraggableHandle(
                                             enabled = canReorder,
@@ -490,7 +490,7 @@ fun HomeScreen(
                                         } else toggle(item.note.id)
                                     },
                                     jiggle = arranging,
-                                    reorderable = canReorder,
+                                    arrange = arranging,
                                     dragging = isDragging,
                                     handle = Modifier.longPressDraggableHandle(
                                         enabled = canReorder,
@@ -881,7 +881,7 @@ private fun rememberWiggle(active: Boolean, seed: Long): State<Float> =
             initialValue = -1.3f,
             targetValue = 1.3f,
             animationSpec = infiniteRepeatable(
-                tween(durationMillis = 105 + (seed % 5).toInt() * 14, easing = LinearEasing),
+                tween(durationMillis = 170 + (seed % 5).toInt() * 20, easing = LinearEasing),
                 RepeatMode.Reverse,
             ),
             label = "angle",
@@ -898,7 +898,7 @@ private fun NoteCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     jiggle: Boolean = false,
-    reorderable: Boolean = false,
+    arrange: Boolean = false,
     dragging: Boolean = false,
     handle: Modifier = Modifier,
 ) {
@@ -932,7 +932,7 @@ private fun NoteCard(
                 }
             }
             .clip(shape)
-            .then(if (reorderable) handle.combinedClickable(onClick = onClick, onLongClick = onLongClick) else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
+            .then(if (arrange) handle else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
     ) {
         Column {
             item.images.firstOrNull()?.let { name ->
@@ -1073,3 +1073,4 @@ private fun appVersion(): String {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
 }
+
