@@ -57,6 +57,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jt.notes.NotesViewModel
+import com.jt.notes.PlaceReminders
 import com.jt.notes.ReminderPlan
 import com.jt.notes.Undo
 import com.jt.notes.data.AudioClips
@@ -115,6 +116,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     val links by vm.noteLabels.collectAsStateWithLifecycle()
     val allAttachments by vm.attachments.collectAsStateWithLifecycle()
     val allClips by vm.audioClips.collectAsStateWithLifecycle()
+    val placeReminders by vm.placeReminders.collectAsStateWithLifecycle()
     val myLabelIds = remember(links, noteId) { links.filter { it.noteId == noteId }.map { it.labelId }.toSet() }
     val myLabels = labels.filter { it.id in myLabelIds }
     val pictures = allAttachments.filter { it.noteId == noteId }
@@ -127,6 +129,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     var isClipPlaying by remember { mutableStateOf(false) }
     var showRecording by remember { mutableStateOf(false) }
     var showDraw by remember { mutableStateOf(false) }
+    var showPlaceDialog by remember { mutableStateOf(false) }
 
     // Find in note: text mode only, selection-based navigation.
     var findOpen by remember { mutableStateOf(false) }
@@ -535,6 +538,10 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                             if (note.reminderAt == null) "Remind me" else "Change reminder",
                             Icons.Outlined.Alarm,
                         ) { menuOpen = false; pickReminder() }
+                        EditorMenuRow("Remind me at a place", Icons.Outlined.LocationOn) {
+                            menuOpen = false
+                            showPlaceDialog = true
+                        }
                         EditorMenuRow("Add picture", Icons.Outlined.Image) {
                             menuOpen = false
                             pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -560,6 +567,15 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         EditorMenuRow("Version history", Icons.Outlined.History) {
                             menuOpen = false
                             scope.launch { versions = vm.versions(noteId) }
+                        }
+                        EditorMenuRow("Save as template", Icons.Outlined.Description) {
+                            menuOpen = false
+                            if (note.title.isBlank() && note.body.isBlank()) {
+                                toast("Nothing to save yet")
+                            } else {
+                                vm.saveTemplate(note.title, note.body, note.isChecklist)
+                                toast("Template saved")
+                            }
                         }
                         HorizontalDivider()
                         EditorMenuRow("Share as text", Icons.Outlined.Share) { menuOpen = false; shareAsText() }
@@ -660,6 +676,36 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                                 Icon(
                                     Icons.Outlined.Close,
                                     contentDescription = "Remove reminder",
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                val place = placeReminders.firstOrNull { it.noteId == noteId }
+                if (place != null) {
+                    Surface(
+                        shape = CircleShape,
+                        color = p.ink.copy(alpha = 0.08f),
+                        contentColor = p.ink,
+                    ) {
+                        Row(
+                            Modifier.padding(start = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Outlined.LocationOn, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text(
+                                (if (place.trigger == PlaceReminders.TRIGGER_ARRIVE) "Arriving" else "Leaving") +
+                                    " · within ${place.radiusM}m",
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.clickable { showPlaceDialog = true },
+                            )
+                            IconButton(onClick = { vm.clearPlaceReminder(noteId) }) {
+                                Icon(
+                                    Icons.Outlined.Close,
+                                    contentDescription = "Remove place reminder",
                                     modifier = Modifier.size(18.dp),
                                 )
                             }
@@ -876,6 +922,12 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         FormatButton(isInlineOn(rich, Fmt.STRIKE), p.accent, { apply(toggleInline(rich, Fmt.STRIKE)) }) {
                             Icon(Icons.Outlined.FormatStrikethrough, contentDescription = "Strikethrough")
                         }
+                        FormatButton(isInlineOn(rich, Fmt.UNDERLINE), p.accent, { apply(toggleInline(rich, Fmt.UNDERLINE)) }) {
+                            Icon(Icons.Outlined.FormatUnderlined, contentDescription = "Underline")
+                        }
+                        FormatButton(isInlineOn(rich, Fmt.CODE), p.accent, { apply(toggleInline(rich, Fmt.CODE)) }) {
+                            Icon(Icons.Outlined.Code, contentDescription = "Code")
+                        }
                         FormatButton(marker == BULLET_MARKER, p.accent, { apply(togglePrefix(rich, BULLET_MARKER)) }) {
                             Icon(Icons.Outlined.FormatListBulleted, contentDescription = "Bullet list")
                         }
@@ -984,6 +1036,14 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 }
             },
             onCancel = { showDraw = false },
+        )
+    }
+    if (showPlaceDialog) {
+        PlaceReminderDialog(
+            vm = vm,
+            noteId = noteId,
+            existing = placeReminders.firstOrNull { it.noteId == noteId },
+            onDismiss = { showPlaceDialog = false },
         )
     }
     if (showRecording) {
@@ -1342,4 +1402,5 @@ private fun Stepper(label: String, value: String, onMinus: () -> Unit, onPlus: (
         ) { Text("+", style = MaterialTheme.typography.titleMedium) }
     }
 }
+
 

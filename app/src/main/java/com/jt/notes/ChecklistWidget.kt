@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
 import com.jt.notes.data.Note
@@ -26,8 +27,25 @@ class ChecklistWidget : AppWidgetProvider() {
             try {
                 val note = pickNote(context)
                 for (id in ids) {
-                    manager.updateAppWidget(id, viewsFor(context, note))
+                    val options = try {
+                        manager.getAppWidgetOptions(id)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    manager.updateAppWidget(id, viewsFor(context, note, options))
                 }
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, id: Int, newOptions: Bundle?) {
+        super.onAppWidgetOptionsChanged(context, manager, id, newOptions)
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                manager.updateAppWidget(id, viewsFor(context, pickNote(context), newOptions))
             } finally {
                 pending.finish()
             }
@@ -49,7 +67,7 @@ class ChecklistWidget : AppWidgetProvider() {
                 .sortedWith(compareByDescending<Note> { it.pinned }.thenByDescending { it.updatedAt })
                 .firstOrNull()
 
-        private fun viewsFor(context: Context, note: Note?): RemoteViews {
+        private fun viewsFor(context: Context, note: Note?, options: Bundle?): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_checklist)
             views.setOnClickPendingIntent(
                 R.id.check_header,
@@ -75,7 +93,7 @@ class ChecklistWidget : AppWidgetProvider() {
                 // flips the item at that position, blanks included.
                 val indexed = parseItems(note.body).mapIndexed { index, item -> index to item }
                     .filter { it.second.text.isNotBlank() }
-                val shown = indexed.take(ROWS.size)
+                val shown = indexed.take(WidgetSizing.rowsForHeight(options, ROWS.size))
                 ROWS.forEachIndexed { i, rowId ->
                     val entry = shown.getOrNull(i)
                     if (entry == null) {
@@ -157,9 +175,12 @@ class ChecklistToggleReceiver : BroadcastReceiver() {
                 }
                 ChecklistWidget.refresh(app)
                 RecentNotesWidget.refresh(app)
+                LargeRecentNotesWidget.refresh(app)
+                CompactNotesWidget.refresh(app)
             } finally {
                 pending.finish()
             }
         }
     }
 }
+

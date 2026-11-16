@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,6 +40,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -177,12 +179,12 @@ private fun DrawScreen(onSave: (Bitmap) -> Unit, onCancel: () -> Unit) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 InkColors.forEachIndexed { index, color ->
                     Box(
                         Modifier
-                            .size(40.dp)
+                            .size(32.dp)
                             .clip(CircleShape)
                             .background(color)
                             .then(
@@ -196,16 +198,21 @@ private fun DrawScreen(onSave: (Bitmap) -> Unit, onCancel: () -> Unit) {
                     )
                 }
                 Spacer(Modifier.weight(1f))
-                TextButton(enabled = strokes.isNotEmpty(), onClick = { strokes = strokes.dropLast(1) }) {
+                TextButton(
+                    enabled = strokes.isNotEmpty(),
+                    onClick = { strokes = strokes.dropLast(1) },
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
                     Text("Undo")
                 }
                 TextButton(
                     enabled = strokes.isNotEmpty() || current != null,
                     onClick = { strokes = emptyList(); current = null },
+                    contentPadding = PaddingValues(horizontal = 8.dp),
                 ) { Text("Clear") }
             }
             Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -230,14 +237,16 @@ private fun DrawScreen(onSave: (Bitmap) -> Unit, onCancel: () -> Unit) {
                     }
                 }
                 Text("Thick", style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.weight(1f))
-                Text(
-                    "Saved sketches show with the note's pictures",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                )
             }
-            Spacer(Modifier.height(8.dp))
+            Text(
+                "Saved sketches show with the note's pictures",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+            )
         }
     }
 }
+

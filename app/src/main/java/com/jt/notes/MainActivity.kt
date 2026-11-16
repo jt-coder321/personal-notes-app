@@ -125,6 +125,8 @@ class MainActivity : FragmentActivity() {
         if (!isChangingConfigurations) stoppedAt = SystemClock.elapsedRealtime()
         RecentNotesWidget.refresh(this)
         ChecklistWidget.refresh(this)
+        LargeRecentNotesWidget.refresh(this)
+        CompactNotesWidget.refresh(this)
     }
 
     override fun onStart() {
@@ -259,4 +261,5 @@ fun App(vm: NotesViewModel = viewModel()) {
         }
     }
 }
+
 
