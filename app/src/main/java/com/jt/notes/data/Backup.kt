@@ -75,6 +75,7 @@ object Backup {
             o.put("archived", n.archived)
             n.trashedAt?.let { o.put("trashedAt", it) }
             n.reminderAt?.let { o.put("reminderAt", it) }
+            o.put("position", n.position)
             o.put("remindPings", n.remindPings)
             o.put("remindGapMin", n.remindGapMin)
             o.put("remindAlarm", n.remindAlarm)
@@ -209,6 +210,7 @@ object Backup {
                     archived = o.optBoolean("archived"),
                     trashedAt = if (o.has("trashedAt")) o.getLong("trashedAt") else null,
                     reminderAt = if (o.has("reminderAt")) o.getLong("reminderAt") else null,
+                    position = o.optLong("position", o.optLong("updatedAt", System.currentTimeMillis())),
                     remindPings = o.optInt("remindPings", 1),
                     remindGapMin = o.optInt("remindGapMin", 5),
                     remindAlarm = o.optBoolean("remindAlarm", false),

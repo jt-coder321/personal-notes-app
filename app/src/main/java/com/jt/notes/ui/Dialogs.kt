@@ -71,25 +71,22 @@ fun ColorPickerDialog(selected: Int, onSelect: (Int) -> Unit, onDismiss: () -> U
 }
 
 @Composable
-private fun NewLabelRow(onAdd: (String) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun NewLabelRow(name: String, onName: (String) -> Unit, onAdd: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = name,
-            onValueChange = { name = it },
-            placeholder = { Text("New label") },
+            onValueChange = onName,
+            placeholder = { Text("New label name") },
             singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                imeAction = androidx.compose.ui.text.input.ImeAction.Done
+            ),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                onDone = { if (name.isNotBlank()) onAdd() }
+            ),
             modifier = Modifier.weight(1f),
         )
-        IconButton(
-            enabled = name.isNotBlank(),
-            onClick = {
-                onAdd(name)
-                name = ""
-            },
-        ) {
-            Icon(Icons.Outlined.Add, contentDescription = "Add label")
-        }
+        FilledTonalButton(enabled = name.isNotBlank(), onClick = onAdd) { Text("Add") }
     }
 }
 
@@ -101,6 +98,8 @@ fun LabelPickerDialog(
     selectedIds: Set<Long>,
     onDismiss: () -> Unit,
 ) {
+    var newName by remember { mutableStateOf("") }
+    val typing = newName.isNotBlank()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Labels") },
@@ -119,23 +118,44 @@ fun LabelPickerDialog(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                NewLabelRow(onAdd = { vm.addLabel(it, attachToNoteId = noteId) })
+                NewLabelRow(
+                    name = newName,
+                    onName = { newName = it },
+                    onAdd = { vm.addLabel(newName, attachToNoteId = noteId); newName = "" },
+                )
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        confirmButton = {
+            if (typing) {
+                TextButton(onClick = { vm.addLabel(newName, attachToNoteId = noteId); newName = "" }) {
+                    Text("Add \"${newName.trim().take(18)}\"")
+                }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Done") }
+            }
+        },
+        dismissButton = if (typing) {
+            { TextButton(onClick = { newName = "" }) { Text("Cancel") } }
+        } else null,
     )
 }
 
 @Composable
 fun ManageLabelsDialog(vm: NotesViewModel, labels: List<Label>, onDismiss: () -> Unit) {
     var renaming by remember { mutableStateOf<Label?>(null) }
+    var newName by remember { mutableStateOf("") }
+    val typing = newName.isNotBlank()
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit labels") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                NewLabelRow(onAdd = { vm.addLabel(it) })
+                NewLabelRow(
+                    name = newName,
+                    onName = { newName = it },
+                    onAdd = { vm.addLabel(newName); newName = "" },
+                )
                 Spacer(Modifier.height(8.dp))
                 labels.forEach { label ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -150,7 +170,18 @@ fun ManageLabelsDialog(vm: NotesViewModel, labels: List<Label>, onDismiss: () ->
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        confirmButton = {
+            if (typing) {
+                TextButton(onClick = { vm.addLabel(newName); newName = "" }) {
+                    Text("Add \"${newName.trim().take(18)}\"")
+                }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Done") }
+            }
+        },
+        dismissButton = if (typing) {
+            { TextButton(onClick = { newName = "" }) { Text("Cancel") } }
+        } else null,
     )
 
     renaming?.let { label ->

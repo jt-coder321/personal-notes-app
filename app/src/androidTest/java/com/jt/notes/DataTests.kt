@@ -18,6 +18,7 @@ import com.jt.notes.data.KeepImport
 import com.jt.notes.data.Label
 import com.jt.notes.data.MIGRATION_1_2
 import com.jt.notes.data.MIGRATION_2_3
+import com.jt.notes.data.MIGRATION_3_4
 import com.jt.notes.data.Note
 import com.jt.notes.data.NoteExport
 import com.jt.notes.data.NoteLabel
@@ -379,7 +380,7 @@ class DataTests {
         )
         v1.close()
 
-        val db = Room.databaseBuilder(context, NotesDb::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+        val db = Room.databaseBuilder(context, NotesDb::class.java, name).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
         val dao = db.dao()
         val note = dao.getNoteByUuid("old")!!
         assertEquals("Written before the update", note.title)
@@ -388,6 +389,7 @@ class DataTests {
         assertEquals(5, note.remindGapMin)
         assertFalse(note.remindAlarm)
         assertEquals(0, note.remindDone)
+        assertEquals(2L, note.position)
         dao.insertAttachment(Attachment(noteId = note.id, fileName = "a.jpg", createdAt = 1))
         dao.insertVersion(Version(noteId = note.id, title = "t", body = "b", isChecklist = false, savedAt = 1))
         dao.updateNote(note.copy(reminderAt = 5))

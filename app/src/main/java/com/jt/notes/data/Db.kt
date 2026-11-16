@@ -46,6 +46,8 @@ data class Note(
     @ColumnInfo(defaultValue = "0") val remindAlarm: Boolean = false,
     /** Pings already sent in the current series. */
     @ColumnInfo(defaultValue = "0") val remindDone: Int = 0,
+    /** Place in "My order". Bigger comes first. New notes start at the top. */
+    @ColumnInfo(defaultValue = "0") val position: Long = System.currentTimeMillis(),
 )
 
 @Entity(tableName = "labels", indices = [Index(value = ["name"], unique = true)])
@@ -252,9 +254,17 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+/** Version 4 adds the order people drag notes into. Existing notes keep their current order. */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `position` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE `notes` SET `position` = `updatedAt`")
+    }
+}
+
 @Database(
     entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, Version::class],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class NotesDb : RoomDatabase() {
@@ -266,7 +276,7 @@ abstract class NotesDb : RoomDatabase() {
 
         fun get(context: Context): NotesDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, NotesDb::class.java, "notes.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
                 .also { instance = it }
         }

@@ -43,6 +43,7 @@ enum class Sort(val label: String) {
     EDITED("Last edited"),
     CREATED("Date created"),
     TITLE("Title"),
+    MANUAL("My order"),
 }
 
 data class NoteItem(val note: Note, val labels: List<Label>, val images: List<String>)
@@ -128,6 +129,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
             }
             when (sort) {
                 Sort.EDITED -> shown // already newest first
+                Sort.MANUAL -> shown.sortedWith(
+                    compareByDescending<NoteItem> { it.note.position }.thenByDescending { it.note.updatedAt }
+                )
                 Sort.CREATED -> shown.sortedByDescending { it.note.createdAt }
                 Sort.TITLE -> shown.sortedWith(
                     compareBy<NoteItem> { it.note.title.isBlank() }.thenBy { it.note.title.lowercase() }
@@ -150,6 +154,24 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     fun setGridView(grid: Boolean) {
         gridView.value = grid
         prefs.edit().putBoolean("grid", grid).apply()
+    }
+
+    /** The editor holds an older copy of the note, so it must not undo a drag. */
+    private suspend fun keepPosition(note: Note): Note =
+        dao.getNote(note.id)?.let { note.copy(position = it.position) } ?: note
+
+    /** Saves the order the notes were dragged into, and switches to "My order". */
+    fun saveOrder(orderedIds: List<Long>) {
+        viewModelScope.launch {
+            writeLock.withLock {
+                val fresh = orderedIds.mapNotNull { dao.getNote(it) }
+                val values = OrderPlan.assign(fresh.map { it.position })
+                fresh.forEachIndexed { i, n ->
+                    if (n.position != values[i]) dao.updateNote(n.copy(position = values[i]))
+                }
+            }
+            setSort(Sort.MANUAL)
+        }
     }
 
     fun setSort(value: Sort) {
@@ -193,7 +215,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Writes the note exactly as given. */
     fun save(note: Note) {
-        viewModelScope.launch { writeLock.withLock { dao.updateNote(note) } }
+        viewModelScope.launch { writeLock.withLock { dao.updateNote(keepPosition(note)) } }
     }
 
     /**
@@ -207,7 +229,7 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                 if (note.isBlank() && dao.attachmentsFor(note.id).isEmpty()) {
                     dao.deleteNote(note.id)
                 } else {
-                    dao.updateNote(note)
+                    dao.updateNote(keepPosition(note))
                     if (original != null && !original.isBlank() &&
                         (original.title != note.title || original.body != note.body)
                     ) {

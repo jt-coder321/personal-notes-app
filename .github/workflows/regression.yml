@@ -2,7 +2,7 @@ name: Regression tests
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   workflow_dispatch:
 
 permissions:

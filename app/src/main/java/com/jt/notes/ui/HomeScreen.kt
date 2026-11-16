@@ -17,7 +17,13 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyStaggeredGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
@@ -88,6 +94,9 @@ fun HomeScreen(
     val themeId by vm.theme.collectAsStateWithLifecycle()
     var exportPassword by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf(setOf<Long>()) }
+    // Set while the person is dragging notes around: the order being shown.
+    var arrangeList by remember { mutableStateOf<List<NoteItem>?>(null) }
+    LaunchedEffect(filter, query) { arrangeList = null }
 
     fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 
@@ -256,6 +265,13 @@ fun HomeScreen(
                                         onClick = { menuOpen = false; vm.setSort(option) },
                                     )
                                 }
+                                if (!inTrash && query.isEmpty() && notes.isNotEmpty()) {
+                                    MenuRow("Arrange notes", Icons.Outlined.DragIndicator) {
+                                        menuOpen = false
+                                        selection = emptySet()
+                                        arrangeList = notes
+                                    }
+                                }
                                 HorizontalDivider()
                                 MenuRow("Edit labels", Icons.Outlined.Edit) { menuOpen = false; showManageLabels = true }
                                 MenuRow("Back up to a file", Icons.Outlined.CloudUpload) {
@@ -319,11 +335,33 @@ fun HomeScreen(
                     }
                 }
 
-                val pinned = if (inTrash) emptyList() else notes.filter { it.note.pinned }
-                val others = if (inTrash) notes else notes.filter { !it.note.pinned }
+                val shownNotes = arrangeList ?: notes
+                val arranging = arrangeList != null
+                val pinned = if (inTrash) emptyList() else shownNotes.filter { it.note.pinned }
+                val others = if (inTrash) shownNotes else shownNotes.filter { !it.note.pinned }
 
                 val onCardClick: (NoteItem) -> Unit = { item ->
                     if (selecting || item.note.trashedAt != null) toggle(item.note.id) else onOpen(item.note.id)
+                }
+
+                if (arranging) {
+                    Surface(
+                        color = p.accent.copy(alpha = 0.14f),
+                        contentColor = p.ink,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Press and hold a note, then drag it where you want. Your order is saved.",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { arrangeList = null }) { Text("Done") }
+                        }
+                    }
                 }
 
                 if (notes.isEmpty()) {
@@ -341,6 +379,17 @@ fun HomeScreen(
                         )
                     }
                 } else {
+                    val reorderState = rememberReorderableLazyStaggeredGridState(gridState) { from, to ->
+                        val list = arrangeList
+                        if (list != null) {
+                            val a = list.indexOfFirst { it.note.id == from.key }
+                            val b = list.indexOfFirst { it.note.id == to.key }
+                            if (a >= 0 && b >= 0 && list[a].note.pinned == list[b].note.pinned) {
+                                arrangeList = list.toMutableList().apply { add(b, removeAt(a)) }
+                            }
+                        }
+                    }
+                    val haptic = LocalHapticFeedback.current
                     LazyVerticalStaggeredGrid(
                         columns = if (grid) StaggeredGridCells.Adaptive(160.dp) else StaggeredGridCells.Fixed(1),
                         state = gridState,
@@ -370,13 +419,22 @@ fun HomeScreen(
                                 SectionHeader("Pinned", showPin = true)
                             }
                             gridItems(pinned, key = { it.note.id }) { item ->
-                                NoteCard(
-                                    item = item,
-                                    open = item.note.id == selectedId,
-                                    checked = item.note.id in selection,
-                                    onClick = { onCardClick(item) },
-                                    onLongClick = { toggle(item.note.id) },
-                                )
+                                ReorderableItem(reorderState, key = item.note.id, enabled = arranging) { isDragging ->
+                                    NoteCard(
+                                        item = item,
+                                        open = item.note.id == selectedId,
+                                        checked = item.note.id in selection,
+                                        onClick = { onCardClick(item) },
+                                        onLongClick = { toggle(item.note.id) },
+                                        arrange = arranging,
+                                        dragging = isDragging,
+                                        handle = Modifier.longPressDraggableHandle(
+                                            enabled = arranging,
+                                            onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                                            onDragStopped = { arrangeList?.let { l -> vm.saveOrder(l.map { it.note.id }) } },
+                                        ),
+                                    )
+                                }
                             }
                             if (others.isNotEmpty()) {
                                 item(key = "header-others", span = StaggeredGridItemSpan.FullLine) {
@@ -385,13 +443,22 @@ fun HomeScreen(
                             }
                         }
                         gridItems(others, key = { it.note.id }) { item ->
-                            NoteCard(
-                                item = item,
-                                open = item.note.id == selectedId,
-                                checked = item.note.id in selection,
-                                onClick = { onCardClick(item) },
-                                onLongClick = { toggle(item.note.id) },
-                            )
+                            ReorderableItem(reorderState, key = item.note.id, enabled = arranging) { isDragging ->
+                                NoteCard(
+                                    item = item,
+                                    open = item.note.id == selectedId,
+                                    checked = item.note.id in selection,
+                                    onClick = { onCardClick(item) },
+                                    onLongClick = { toggle(item.note.id) },
+                                    arrange = arranging,
+                                    dragging = isDragging,
+                                    handle = Modifier.longPressDraggableHandle(
+                                        enabled = arranging,
+                                        onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+                                        onDragStopped = { arrangeList?.let { l -> vm.saveOrder(l.map { it.note.id }) } },
+                                    ),
+                                )
+                            }
                         }
                     }
                 }
@@ -768,12 +835,16 @@ private fun NoteCard(
     checked: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    arrange: Boolean = false,
+    dragging: Boolean = false,
+    handle: Modifier = Modifier,
 ) {
     val p = LocalPalette.current
     val note = item.note
     val background = noteBackground(note.color)
     val shape = RoundedCornerShape(p.cardRadius)
     val border = when {
+        dragging -> BorderStroke(3.dp, p.accent)
         checked -> BorderStroke(3.dp, p.ink)
         open -> BorderStroke(2.dp, p.accent)
         p.border > 0.dp -> BorderStroke(p.border, p.borderColor)
@@ -788,7 +859,8 @@ private fun NoteCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .then(if (dragging) Modifier.graphicsLayer(scaleX = 1.04f, scaleY = 1.04f, alpha = 0.92f) else Modifier)
+            .then(if (arrange) handle else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
     ) {
         Column {
             item.images.firstOrNull()?.let { name ->
