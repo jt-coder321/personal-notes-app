@@ -17,6 +17,12 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.ui.graphics.graphicsLayer
@@ -829,6 +835,22 @@ private fun CaptureBar(onNote: () -> Unit, onChecklist: () -> Unit, onSpeak: () 
 }
 
 @Composable
+private fun rememberWiggle(active: Boolean, seed: Long): State<Float> =
+    if (active) {
+        rememberInfiniteTransition(label = "wiggle").animateFloat(
+            initialValue = -1.3f,
+            targetValue = 1.3f,
+            animationSpec = infiniteRepeatable(
+                tween(durationMillis = 105 + (seed % 5).toInt() * 14, easing = LinearEasing),
+                RepeatMode.Reverse,
+            ),
+            label = "angle",
+        )
+    } else {
+        remember { mutableStateOf(0f) }
+    }
+
+@Composable
 private fun NoteCard(
     item: NoteItem,
     open: Boolean,
@@ -843,6 +865,8 @@ private fun NoteCard(
     val note = item.note
     val background = noteBackground(note.color)
     val shape = RoundedCornerShape(p.cardRadius)
+    // While arranging, every note jiggles like icons on a home screen, except the one being dragged.
+    val wiggle = rememberWiggle(active = arrange && !dragging, seed = note.id)
     val border = when {
         dragging -> BorderStroke(3.dp, p.accent)
         checked -> BorderStroke(3.dp, p.ink)
@@ -858,8 +882,15 @@ private fun NoteCard(
         border = border,
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                rotationZ = wiggle.value
+                if (dragging) {
+                    scaleX = 1.05f
+                    scaleY = 1.05f
+                    alpha = 0.92f
+                }
+            }
             .clip(shape)
-            .then(if (dragging) Modifier.graphicsLayer(scaleX = 1.04f, scaleY = 1.04f, alpha = 0.92f) else Modifier)
             .then(if (arrange) handle else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
     ) {
         Column {
