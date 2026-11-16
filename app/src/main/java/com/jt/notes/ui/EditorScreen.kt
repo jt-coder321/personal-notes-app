@@ -220,7 +220,10 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     var pingDialogAt by remember { mutableStateOf<Long?>(null) }
 
     fun pickReminder() {
-        val start = Calendar.getInstance().apply { add(Calendar.HOUR_OF_DAY, 1) }
+        val existing = latest.reminderAt
+        val start = Calendar.getInstance().apply {
+            if (existing != null) timeInMillis = existing else add(Calendar.HOUR_OF_DAY, 1)
+        }
         DatePickerDialog(
             context,
             { _, year, month, day ->
@@ -238,7 +241,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         }
                     },
                     start.get(Calendar.HOUR_OF_DAY),
-                    0,
+                    if (existing != null) start.get(Calendar.MINUTE) else 0,
                     android.text.format.DateFormat.is24HourFormat(context),
                 ).show()
             },
@@ -258,33 +261,20 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(formatReminder(at), style = MaterialTheme.typography.titleSmall)
-                    Text("Number of pings")
-                    Row(
-                        Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        listOf(1, 2, 3, 5, 10).forEach { n ->
-                            androidx.compose.material3.FilterChip(
-                                selected = pings == n,
-                                onClick = { pings = n },
-                                label = { Text("$n") },
-                            )
-                        }
-                    }
+                    val gaps = listOf(1, 2, 3, 5, 10, 15, 20, 30, 45, 60)
+                    Stepper(
+                        label = "Number of pings",
+                        value = if (pings == 1) "1" else "$pings",
+                        onMinus = { if (pings > 1) pings -= 1 },
+                        onPlus = { if (pings < 20) pings += 1 },
+                    )
                     if (pings > 1) {
-                        Text("Repeat every")
-                        Row(
-                            Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            listOf(1, 5, 10, 15, 30).forEach { m ->
-                                androidx.compose.material3.FilterChip(
-                                    selected = gap == m,
-                                    onClick = { gap = m },
-                                    label = { Text("$m min") },
-                                )
-                            }
-                        }
+                        Stepper(
+                            label = "Repeat every",
+                            value = if (gap < 60) "$gap min" else "1 hour",
+                            onMinus = { gaps.lastOrNull { it < gap }?.let { gap = it } },
+                            onPlus = { gaps.firstOrNull { it > gap }?.let { gap = it } },
+                        )
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("Loud alarm sound", Modifier.weight(1f))
@@ -1038,4 +1028,27 @@ private fun reminderDetail(n: com.jt.notes.data.Note): String {
     if (n.remindPings > 1) parts.add("${n.remindPings} pings, every ${n.remindGapMin} min")
     if (n.remindAlarm) parts.add("alarm")
     return if (parts.isEmpty()) "" else " \u00b7 " + parts.joinToString(", ")
+}
+
+@Composable
+private fun Stepper(label: String, value: String, onMinus: () -> Unit, onPlus: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f))
+        androidx.compose.material3.OutlinedButton(
+            onClick = onMinus,
+            modifier = Modifier.size(40.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+        ) { Text("\u2212", style = MaterialTheme.typography.titleMedium) }
+        Text(
+            value,
+            modifier = Modifier.width(72.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            style = MaterialTheme.typography.titleSmall,
+        )
+        androidx.compose.material3.OutlinedButton(
+            onClick = onPlus,
+            modifier = Modifier.size(40.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+        ) { Text("+", style = MaterialTheme.typography.titleMedium) }
+    }
 }
