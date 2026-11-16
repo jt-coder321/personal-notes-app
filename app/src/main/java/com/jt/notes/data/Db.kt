@@ -1,6 +1,7 @@
 package com.jt.notes.data
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
@@ -37,6 +38,14 @@ data class Note(
     val createdAt: Long,
     val updatedAt: Long,
     val reminderAt: Long? = null,
+    /** How many times the reminder pings before it stops. */
+    @ColumnInfo(defaultValue = "1") val remindPings: Int = 1,
+    /** Minutes between pings. */
+    @ColumnInfo(defaultValue = "5") val remindGapMin: Int = 5,
+    /** Loud alarm sound instead of a quiet notification. */
+    @ColumnInfo(defaultValue = "0") val remindAlarm: Boolean = false,
+    /** Pings already sent in the current series. */
+    @ColumnInfo(defaultValue = "0") val remindDone: Int = 0,
 )
 
 @Entity(tableName = "labels", indices = [Index(value = ["name"], unique = true)])
@@ -146,6 +155,9 @@ interface NotesDao {
     @Query("UPDATE notes SET reminderAt = NULL WHERE id = :id")
     suspend fun clearReminder(id: Long)
 
+    @Query("UPDATE notes SET reminderAt = :at, remindDone = :done WHERE id = :id")
+    suspend fun setReminderState(id: Long, at: Long?, done: Int)
+
     @Insert
     suspend fun insertNote(note: Note): Long
 
@@ -230,9 +242,19 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
+/** Version 3 adds repeating pings and alarm sound to reminders. */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindPings` INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindGapMin` INTEGER NOT NULL DEFAULT 5")
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindAlarm` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindDone` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(
     entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, Version::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class NotesDb : RoomDatabase() {
@@ -244,7 +266,7 @@ abstract class NotesDb : RoomDatabase() {
 
         fun get(context: Context): NotesDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, NotesDb::class.java, "notes.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
                 .also { instance = it }
         }

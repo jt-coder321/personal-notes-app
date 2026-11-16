@@ -148,7 +148,10 @@ class MainActivity : FragmentActivity() {
             ACTION_NEW_CHECKLIST -> vm.createAndOpen(isChecklist = true)
             ACTION_OPEN_NOTE -> {
                 val id = intent.getLongExtra(Reminders.EXTRA_NOTE_ID, -1L)
-                if (id > 0) vm.pendingOpen.value = id
+                if (id > 0) {
+                    if (intent.getBooleanExtra(Reminders.EXTRA_ACK, false)) vm.acknowledgeReminder(id)
+                    vm.pendingOpen.value = id
+                }
             }
         }
     }

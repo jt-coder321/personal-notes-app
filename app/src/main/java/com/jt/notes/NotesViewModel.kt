@@ -320,6 +320,14 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     // ----- reminders -----
 
+    /** Opening a reminder notification counts as seeing it, so the remaining pings stop. */
+    fun acknowledgeReminder(noteId: Long) {
+        viewModelScope.launch {
+            Reminders.cancel(context, noteId)
+            dao.setReminderState(noteId, null, 0)
+        }
+    }
+
     fun setReminder(noteId: Long, at: Long?) {
         if (at == null) Reminders.cancel(context, noteId) else Reminders.schedule(context, noteId, at)
     }

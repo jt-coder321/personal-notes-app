@@ -217,6 +217,8 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         }
     }
 
+    var pingDialogAt by remember { mutableStateOf<Long?>(null) }
+
     fun pickReminder() {
         val start = Calendar.getInstance().apply { add(Calendar.HOUR_OF_DAY, 1) }
         DatePickerDialog(
@@ -232,11 +234,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         if (at <= System.currentTimeMillis()) {
                             toast("Pick a time in the future")
                         } else {
-                            edit(latest.copy(reminderAt = at))
-                            vm.setReminder(noteId, at)
-                            if (Build.VERSION.SDK_INT >= 33) {
-                                askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            }
+                            pingDialogAt = at
                         }
                     },
                     start.get(Calendar.HOUR_OF_DAY),
@@ -248,6 +246,66 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
             start.get(Calendar.MONTH),
             start.get(Calendar.DAY_OF_MONTH),
         ).show()
+    }
+
+    pingDialogAt?.let { at ->
+        var pings by remember(at) { mutableStateOf(latest.remindPings) }
+        var gap by remember(at) { mutableStateOf(latest.remindGapMin) }
+        var alarm by remember(at) { mutableStateOf(latest.remindAlarm) }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pingDialogAt = null },
+            title = { Text("Reminder options") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(formatReminder(at), style = MaterialTheme.typography.titleSmall)
+                    Text("Number of pings")
+                    Row(
+                        Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        listOf(1, 2, 3, 5, 10).forEach { n ->
+                            androidx.compose.material3.FilterChip(
+                                selected = pings == n,
+                                onClick = { pings = n },
+                                label = { Text("$n") },
+                            )
+                        }
+                    }
+                    if (pings > 1) {
+                        Text("Repeat every")
+                        Row(
+                            Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            listOf(1, 5, 10, 15, 30).forEach { m ->
+                                androidx.compose.material3.FilterChip(
+                                    selected = gap == m,
+                                    onClick = { gap = m },
+                                    label = { Text("$m min") },
+                                )
+                            }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Loud alarm sound", Modifier.weight(1f))
+                        androidx.compose.material3.Switch(checked = alarm, onCheckedChange = { alarm = it })
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    edit(latest.copy(reminderAt = at, remindPings = pings, remindGapMin = gap, remindAlarm = alarm, remindDone = 0))
+                    vm.setReminder(noteId, at)
+                    pingDialogAt = null
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }) { Text("Set reminder") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { pingDialogAt = null }) { Text("Cancel") }
+            },
+        )
     }
 
     fun shareAsText() {
@@ -425,7 +483,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         ) {
                             Icon(Icons.Outlined.Alarm, contentDescription = null, modifier = Modifier.size(18.dp))
                             Text(
-                                formatReminder(reminder),
+                                formatReminder(reminder) + reminderDetail(note),
                                 style = MaterialTheme.typography.labelLarge,
                                 modifier = Modifier.clickable { pickReminder() },
                             )
@@ -973,4 +1031,11 @@ private fun FormatButton(active: Boolean, accent: Color, onClick: () -> Unit, co
             contentColor = if (active) accent else LocalContentColor.current,
         ),
     ) { content() }
+}
+
+private fun reminderDetail(n: com.jt.notes.data.Note): String {
+    val parts = mutableListOf<String>()
+    if (n.remindPings > 1) parts.add("${n.remindPings} pings, every ${n.remindGapMin} min")
+    if (n.remindAlarm) parts.add("alarm")
+    return if (parts.isEmpty()) "" else " \u00b7 " + parts.joinToString(", ")
 }

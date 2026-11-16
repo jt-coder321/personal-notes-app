@@ -75,6 +75,9 @@ object Backup {
             o.put("archived", n.archived)
             n.trashedAt?.let { o.put("trashedAt", it) }
             n.reminderAt?.let { o.put("reminderAt", it) }
+            o.put("remindPings", n.remindPings)
+            o.put("remindGapMin", n.remindGapMin)
+            o.put("remindAlarm", n.remindAlarm)
             o.put("createdAt", n.createdAt)
             o.put("updatedAt", n.updatedAt)
             val names = JSONArray()
@@ -206,6 +209,9 @@ object Backup {
                     archived = o.optBoolean("archived"),
                     trashedAt = if (o.has("trashedAt")) o.getLong("trashedAt") else null,
                     reminderAt = if (o.has("reminderAt")) o.getLong("reminderAt") else null,
+                    remindPings = o.optInt("remindPings", 1),
+                    remindGapMin = o.optInt("remindGapMin", 5),
+                    remindAlarm = o.optBoolean("remindAlarm", false),
                     createdAt = o.optLong("createdAt", System.currentTimeMillis()),
                     updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
                 )
