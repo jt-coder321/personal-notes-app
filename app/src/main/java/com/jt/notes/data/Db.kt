@@ -58,6 +58,8 @@ data class Note(
 data class Label(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
+    /** The parent label, for nesting. Null means top level. */
+    val parentId: Long? = null,
 )
 
 @Entity(
@@ -122,6 +124,44 @@ data class AudioClip(
     val createdAt: Long,
 )
 
+/** A saved starter for new notes: title, body and checklist state, reused as-is. */
+@Entity(tableName = "templates")
+data class Template(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val body: String,
+    val isChecklist: Boolean = false,
+    val createdAt: Long,
+)
+
+/** A reminder that fires when the phone arrives at, or leaves, a place. One per note. */
+@Entity(
+    tableName = "place_reminders",
+    foreignKeys = [
+        ForeignKey(
+            entity = Note::class,
+            parentColumns = ["id"],
+            childColumns = ["noteId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["noteId"], unique = true)],
+)
+data class PlaceReminder(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val noteId: Long,
+    val latitude: Double,
+    val longitude: Double,
+    /** Radius in metres around the place. */
+    val radiusM: Int,
+    /** 0 = fire on arriving, 1 = fire on leaving. See PlaceReminders. */
+    val trigger: Int,
+    /** True once it has fired; a place reminder fires once. */
+    @ColumnInfo(defaultValue = "0") val fired: Boolean = false,
+    /** Whether the phone was inside the radius at the last check. Null until the first check. */
+    val lastInside: Boolean? = null,
+)
+
 /** An earlier state of a note's text, kept so it can be brought back. */
 @Entity(
     tableName = "versions",
@@ -160,6 +200,12 @@ interface NotesDao {
 
     @Query("SELECT * FROM audio_clips ORDER BY createdAt")
     fun observeAudioClips(): Flow<List<AudioClip>>
+
+    @Query("SELECT * FROM templates ORDER BY title COLLATE NOCASE")
+    fun observeTemplates(): Flow<List<Template>>
+
+    @Query("SELECT * FROM place_reminders")
+    fun observePlaceReminders(): Flow<List<PlaceReminder>>
 
     @Query("SELECT * FROM notes")
     suspend fun allNotes(): List<Note>
@@ -229,6 +275,34 @@ interface NotesDao {
 
     @Delete
     suspend fun deleteLabel(label: Label)
+
+    /** Moves a deleted label's children to the top level. */
+    @Query("UPDATE labels SET parentId = NULL WHERE parentId = :id")
+    suspend fun clearChildrenParent(id: Long)
+
+    @Query("SELECT * FROM templates ORDER BY title COLLATE NOCASE")
+    suspend fun allTemplates(): List<Template>
+
+    @Insert
+    suspend fun insertTemplate(template: Template): Long
+
+    @Delete
+    suspend fun deleteTemplate(template: Template)
+
+    @Query("SELECT * FROM place_reminders")
+    suspend fun allPlaceReminders(): List<PlaceReminder>
+
+    @Query("SELECT * FROM place_reminders WHERE noteId = :noteId")
+    suspend fun placeReminderFor(noteId: Long): PlaceReminder?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlaceReminder(reminder: PlaceReminder): Long
+
+    @Update
+    suspend fun updatePlaceReminder(reminder: PlaceReminder)
+
+    @Query("DELETE FROM place_reminders WHERE noteId = :noteId")
+    suspend fun deletePlaceReminder(noteId: Long)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun addNoteLabel(noteLabel: NoteLabel)
@@ -323,9 +397,29 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+/** Version 6 adds label nesting, saved templates, and place reminders. */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `labels` ADD COLUMN `parentId` INTEGER")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `templates` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`title` TEXT NOT NULL, `body` TEXT NOT NULL, `isChecklist` INTEGER NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `place_reminders` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`noteId` INTEGER NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, " +
+                "`radiusM` INTEGER NOT NULL, `trigger` INTEGER NOT NULL, `fired` INTEGER NOT NULL DEFAULT 0, " +
+                "`lastInside` INTEGER, " +
+                "FOREIGN KEY(`noteId`) REFERENCES `notes`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+        )
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_place_reminders_noteId` ON `place_reminders` (`noteId`)")
+    }
+}
+
 @Database(
-    entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, AudioClip::class, Version::class],
-    version = 5,
+    entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, AudioClip::class, Version::class, Template::class, PlaceReminder::class],
+    version = 6,
     exportSchema = false,
 )
 abstract class NotesDb : RoomDatabase() {
@@ -337,10 +431,11 @@ abstract class NotesDb : RoomDatabase() {
 
         fun get(context: Context): NotesDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, NotesDb::class.java, "notes.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
                 .also { instance = it }
         }
     }
 }
+
 

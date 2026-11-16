@@ -1,5 +1,13 @@
 package com.jt.notes.ui
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -15,13 +23,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.jt.notes.LabelTree
 import com.jt.notes.NotesViewModel
+import com.jt.notes.PlaceReminders
 import com.jt.notes.ReminderPlan
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import com.jt.notes.data.Label
 import com.jt.notes.data.Note
+import com.jt.notes.data.PlaceReminder
+import com.jt.notes.data.Template
 import com.jt.notes.data.Version
 import com.jt.notes.data.checklistBodyToText
 import java.text.DateFormat
@@ -107,11 +121,12 @@ fun LabelPickerDialog(
         title = { Text("Labels") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                labels.forEach { label ->
+                LabelTree.ordered(labels).forEach { (label, depth) ->
                     val on = label.id in selectedIds
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .padding(start = (depth.coerceAtMost(LabelTree.MAX_INDENT_DEPTH) * 16).dp)
                             .clickable { vm.setNoteLabel(noteId, label.id, !on) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -145,6 +160,7 @@ fun LabelPickerDialog(
 @Composable
 fun ManageLabelsDialog(vm: NotesViewModel, labels: List<Label>, onDismiss: () -> Unit) {
     var renaming by remember { mutableStateOf<Label?>(null) }
+    var parenting by remember { mutableStateOf<Label?>(null) }
     var newName by remember { mutableStateOf("") }
     val typing = newName.isNotBlank()
 
@@ -159,9 +175,31 @@ fun ManageLabelsDialog(vm: NotesViewModel, labels: List<Label>, onDismiss: () ->
                     onAdd = { vm.addLabel(newName); newName = "" },
                 )
                 Spacer(Modifier.height(8.dp))
-                labels.forEach { label ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(label.name, modifier = Modifier.weight(1f))
+                LabelTree.ordered(labels).forEach { (label, depth) ->
+                    val parentName = labels.firstOrNull { it.id == label.parentId }?.name
+                    Row(
+                        modifier = Modifier.padding(
+                            start = (depth.coerceAtMost(LabelTree.MAX_INDENT_DEPTH) * 16).dp,
+                        ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            label.name,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        TextButton(
+                            onClick = { parenting = label },
+                            contentPadding = PaddingValues(horizontal = 4.dp),
+                        ) {
+                            Text(
+                                parentName ?: "Top level",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         IconButton(onClick = { renaming = label }) {
                             Icon(Icons.Outlined.Edit, contentDescription = "Rename")
                         }
@@ -203,6 +241,49 @@ fun ManageLabelsDialog(vm: NotesViewModel, labels: List<Label>, onDismiss: () ->
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
         )
     }
+
+    parenting?.let { label ->
+        ParentPickerDialog(vm = vm, label = label, labels = labels, onDismiss = { parenting = null })
+    }
+}
+
+/** Picks the parent of one label: top level, or another label that is not itself or below it. */
+@Composable
+fun ParentPickerDialog(vm: NotesViewModel, label: Label, labels: List<Label>, onDismiss: () -> Unit) {
+    val descendants = LabelTree.descendantIds(labels, label.id)
+    val choices = labels.filter { it.id != label.id && it.id !in descendants }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Parent of \"${label.name}\"") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { vm.setLabelParent(label, null); onDismiss() }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Top level", modifier = Modifier.weight(1f))
+                    if (label.parentId == null) Icon(Icons.Outlined.Check, contentDescription = null)
+                }
+                LabelTree.ordered(choices).forEach { (choice, depth) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = (depth.coerceAtMost(LabelTree.MAX_INDENT_DEPTH) * 16).dp)
+                            .clickable { vm.setLabelParent(label, choice.id); onDismiss() }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(choice.name, modifier = Modifier.weight(1f))
+                        if (label.parentId == choice.id) Icon(Icons.Outlined.Check, contentDescription = null)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** Asks how to back up: plain, or locked with a password. */
@@ -348,3 +429,206 @@ fun VersionHistoryDialog(versions: List<Version>, onRestore: (Version) -> Unit, 
     )
 }
 
+
+
+/** Lists saved templates. Tapping one starts a new note from it; the X deletes it. */
+@Composable
+fun TemplatesDialog(
+    templates: List<Template>,
+    onApply: (Template) -> Unit,
+    onDelete: (Template) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Templates") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (templates.isEmpty()) {
+                    Text("No templates yet. Open a note and tap Save as template to keep it as a starter.")
+                }
+                templates.forEach { template ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onApply(template) }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                template.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            val firstLine = (if (template.isChecklist) checklistBodyToText(template.body) else template.body)
+                                .lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+                            if (firstLine.isNotEmpty()) {
+                                Text(
+                                    firstLine,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        IconButton(onClick = { onDelete(template) }) {
+                            Icon(Icons.Outlined.Delete, contentDescription = "Delete template")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+/** Sets a reminder that fires when the phone arrives at, or leaves, the current place. */
+@Composable
+fun PlaceReminderDialog(
+    vm: NotesViewModel,
+    noteId: Long,
+    existing: PlaceReminder?,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    var latitude by remember { mutableStateOf(existing?.latitude) }
+    var longitude by remember { mutableStateOf(existing?.longitude) }
+    var radiusM by remember { mutableStateOf(existing?.radiusM ?: PlaceReminders.RADIUS_DEFAULT) }
+    var trigger by remember { mutableStateOf(existing?.trigger ?: PlaceReminders.TRIGGER_ARRIVE) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
+    var pendingSave by remember { mutableStateOf(false) }
+
+    fun hasLocation(): Boolean {
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    fun hasBackground(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    fun capture() {
+        val loc = PlaceReminders.lastKnown(context)
+        if (loc == null) {
+            message = "Could not get a location. Turn location on and try again."
+        } else {
+            latitude = loc.latitude
+            longitude = loc.longitude
+            message = null
+        }
+    }
+
+    val askFine = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            capture()
+        } else {
+            message = "Location permission is needed to use the current place."
+        }
+    }
+    val askBackground = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val lat = latitude
+        val lng = longitude
+        if (granted && pendingSave && lat != null && lng != null) {
+            pendingSave = false
+            vm.savePlaceReminder(noteId, lat, lng, radiusM, trigger)
+            onDismiss()
+        } else {
+            pendingSave = false
+            showSettings = true
+            message = "Background location was not allowed, so the reminder was not saved. " +
+                "Place reminders need location access all the time to notice when you arrive or leave."
+        }
+    }
+
+    fun save() {
+        val lat = latitude
+        val lng = longitude
+        if (lat == null || lng == null) {
+            message = "Use the current location first."
+            return
+        }
+        if (!hasBackground()) {
+            pendingSave = true
+            askBackground.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            return
+        }
+        vm.savePlaceReminder(noteId, lat, lng, radiusM, trigger)
+        onDismiss()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Remind me at a place") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Pings when you arrive at, or leave, the place you are at now. " +
+                        "Checked about every 15 minutes while location is on.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = { if (hasLocation()) capture() else askFine.launch(Manifest.permission.ACCESS_FINE_LOCATION) }) {
+                        Text("Use current location")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (latitude != null && longitude != null) "Place set" else "No place yet",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text("Within", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PlaceReminders.RADII.forEach { radius ->
+                        FilterChip(
+                            selected = radiusM == radius,
+                            onClick = { radiusM = radius },
+                            label = { Text("${radius}m") },
+                        )
+                    }
+                }
+                Text("Ping me", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = trigger == PlaceReminders.TRIGGER_ARRIVE,
+                        onClick = { trigger = PlaceReminders.TRIGGER_ARRIVE },
+                        label = { Text("When I arrive") },
+                    )
+                    FilterChip(
+                        selected = trigger == PlaceReminders.TRIGGER_LEAVE,
+                        onClick = { trigger = PlaceReminders.TRIGGER_LEAVE },
+                        label = { Text("When I leave") },
+                    )
+                }
+                if (existing != null) {
+                    TextButton(onClick = { vm.clearPlaceReminder(noteId); onDismiss() }) {
+                        Text("Remove place reminder")
+                    }
+                }
+                message?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                if (showSettings) {
+                    TextButton(onClick = {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", context.packageName, null),
+                            ),
+                        )
+                    }) { Text("Open app settings") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { save() }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
