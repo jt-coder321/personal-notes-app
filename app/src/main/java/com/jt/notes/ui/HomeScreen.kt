@@ -343,11 +343,13 @@ fun HomeScreen(
 
                 val shownNotes = arrangeList ?: notes
                 val arranging = arrangeList != null
+                // Holding a note starts arranging, except in the Trash, in search, or while notes are selected.
+                val canReorder = arranging || (!inTrash && query.isEmpty() && !selecting)
                 val pinned = if (inTrash) emptyList() else shownNotes.filter { it.note.pinned }
                 val others = if (inTrash) shownNotes else shownNotes.filter { !it.note.pinned }
 
                 val onCardClick: (NoteItem) -> Unit = { item ->
-                    if (selecting || item.note.trashedAt != null) toggle(item.note.id) else onOpen(item.note.id)
+                    if (selecting || arrangeList != null || item.note.trashedAt != null) toggle(item.note.id) else onOpen(item.note.id)
                 }
 
                 if (arranging) {
@@ -361,7 +363,7 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                "Press and hold a note, then drag it where you want. Your order is saved.",
+                                "Drag a note where you want it. Tap notes to select them. Your order is saved.",
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.weight(1f),
                             )
@@ -425,19 +427,26 @@ fun HomeScreen(
                                 SectionHeader("Pinned", showPin = true)
                             }
                             gridItems(pinned, key = { it.note.id }) { item ->
-                                ReorderableItem(reorderState, key = item.note.id, enabled = arranging) { isDragging ->
+                                ReorderableItem(reorderState, key = item.note.id, enabled = canReorder) { isDragging ->
                                     NoteCard(
                                         item = item,
                                         open = item.note.id == selectedId,
                                         checked = item.note.id in selection,
                                         onClick = { onCardClick(item) },
                                         onLongClick = { toggle(item.note.id) },
-                                        arrange = arranging,
+                                        jiggle = arranging,
+                                        reorderable = canReorder,
                                         dragging = isDragging,
                                         handle = Modifier.longPressDraggableHandle(
-                                            enabled = arranging,
-                                            onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                                            onDragStopped = { arrangeList?.let { l -> vm.saveOrder(l.map { it.note.id }) } },
+                                            enabled = canReorder,
+                                            onDragStarted = {
+                                                if (arrangeList == null) arrangeList = notes
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            },
+                                            onDragStopped = {
+                                                val l = arrangeList
+                                                if (l != null && l.map { it.note.id } != notes.map { it.note.id }) vm.saveOrder(l.map { it.note.id })
+                                            },
                                         ),
                                     )
                                 }
@@ -449,19 +458,26 @@ fun HomeScreen(
                             }
                         }
                         gridItems(others, key = { it.note.id }) { item ->
-                            ReorderableItem(reorderState, key = item.note.id, enabled = arranging) { isDragging ->
+                            ReorderableItem(reorderState, key = item.note.id, enabled = canReorder) { isDragging ->
                                 NoteCard(
                                     item = item,
                                     open = item.note.id == selectedId,
                                     checked = item.note.id in selection,
                                     onClick = { onCardClick(item) },
                                     onLongClick = { toggle(item.note.id) },
-                                    arrange = arranging,
+                                    jiggle = arranging,
+                                    reorderable = canReorder,
                                     dragging = isDragging,
                                     handle = Modifier.longPressDraggableHandle(
-                                        enabled = arranging,
-                                        onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                                        onDragStopped = { arrangeList?.let { l -> vm.saveOrder(l.map { it.note.id }) } },
+                                        enabled = canReorder,
+                                        onDragStarted = {
+                                            if (arrangeList == null) arrangeList = notes
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        },
+                                        onDragStopped = {
+                                            val l = arrangeList
+                                            if (l != null && l.map { it.note.id } != notes.map { it.note.id }) vm.saveOrder(l.map { it.note.id })
+                                        },
                                     ),
                                 )
                             }
@@ -857,7 +873,8 @@ private fun NoteCard(
     checked: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
-    arrange: Boolean = false,
+    jiggle: Boolean = false,
+    reorderable: Boolean = false,
     dragging: Boolean = false,
     handle: Modifier = Modifier,
 ) {
@@ -866,7 +883,7 @@ private fun NoteCard(
     val background = noteBackground(note.color)
     val shape = RoundedCornerShape(p.cardRadius)
     // While arranging, every note jiggles like icons on a home screen, except the one being dragged.
-    val wiggle = rememberWiggle(active = arrange && !dragging, seed = note.id)
+    val wiggle = rememberWiggle(active = jiggle && !dragging, seed = note.id)
     val border = when {
         dragging -> BorderStroke(3.dp, p.accent)
         checked -> BorderStroke(3.dp, p.ink)
@@ -891,7 +908,7 @@ private fun NoteCard(
                 }
             }
             .clip(shape)
-            .then(if (arrange) handle else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
+            .then(if (reorderable) handle.clickable(onClick = onClick) else Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)),
     ) {
         Column {
             item.images.firstOrNull()?.let { name ->
