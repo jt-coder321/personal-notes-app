@@ -7,4 +7,7 @@
     <string name="widget_recent_label">Recent notes</string>
     <string name="widget_recent_name">Recent notes</string>
     <string name="widget_empty">No notes yet. Tap + to add one.</string>
+    <string name="widget_checklist_name">Checklist</string>
+    <string name="widget_checklist_empty">No checklist yet. Tap + to start one.</string>
 </resources>
+

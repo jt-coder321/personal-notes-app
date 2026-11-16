@@ -46,6 +46,10 @@ data class Note(
     @ColumnInfo(defaultValue = "0") val remindAlarm: Boolean = false,
     /** Pings already sent in the current series. */
     @ColumnInfo(defaultValue = "0") val remindDone: Int = 0,
+    /** Repeat for the reminder: 0 = once, 1 = daily, 2 = weekly. See ReminderPlan. */
+    @ColumnInfo(defaultValue = "0") val remindRepeat: Int = 0,
+    /** The time the current reminder occurrence was picked for. Pings move reminderAt forward; this stays put, so repeats land on the same time of day and editing pre-fills the original pick. */
+    val remindAnchor: Long? = null,
     /** Place in "My order". Bigger comes first. New notes start at the top. */
     @ColumnInfo(defaultValue = "0") val position: Long = System.currentTimeMillis(),
 )
@@ -97,6 +101,27 @@ data class Attachment(
     val createdAt: Long,
 )
 
+/** A voice recording attached to a note. The file lives in the app's private audio folder. */
+@Entity(
+    tableName = "audio_clips",
+    foreignKeys = [
+        ForeignKey(
+            entity = Note::class,
+            parentColumns = ["id"],
+            childColumns = ["noteId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("noteId")],
+)
+data class AudioClip(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val noteId: Long,
+    val fileName: String,
+    val durationMs: Long,
+    val createdAt: Long,
+)
+
 /** An earlier state of a note's text, kept so it can be brought back. */
 @Entity(
     tableName = "versions",
@@ -133,6 +158,9 @@ interface NotesDao {
     @Query("SELECT * FROM attachments ORDER BY createdAt")
     fun observeAttachments(): Flow<List<Attachment>>
 
+    @Query("SELECT * FROM audio_clips ORDER BY createdAt")
+    fun observeAudioClips(): Flow<List<AudioClip>>
+
     @Query("SELECT * FROM notes")
     suspend fun allNotes(): List<Note>
 
@@ -160,6 +188,14 @@ interface NotesDao {
     @Query("UPDATE notes SET reminderAt = :at, remindDone = :done WHERE id = :id")
     suspend fun setReminderState(id: Long, at: Long?, done: Int)
 
+    /** Moves a repeating reminder to its next occurrence, which becomes the new anchor. */
+    @Query("UPDATE notes SET reminderAt = :at, remindDone = :done, remindAnchor = :anchor WHERE id = :id")
+    suspend fun setReminderSeries(id: Long, at: Long?, done: Int, anchor: Long?)
+
+    /** Clears a reminder entirely, including its repeat chain. */
+    @Query("UPDATE notes SET reminderAt = NULL, remindDone = 0, remindAnchor = NULL, remindRepeat = 0 WHERE id = :id")
+    suspend fun clearReminderFull(id: Long)
+
     @Insert
     suspend fun insertNote(note: Note): Long
 
@@ -177,7 +213,8 @@ interface NotesDao {
 
     @Query(
         "DELETE FROM notes WHERE trim(title) = '' AND (trim(body) = '' OR trim(body) = '[ ]') " +
-            "AND id NOT IN (SELECT noteId FROM attachments)"
+            "AND id NOT IN (SELECT noteId FROM attachments) " +
+            "AND id NOT IN (SELECT noteId FROM audio_clips)"
     )
     suspend fun deleteBlankNotes()
 
@@ -210,6 +247,15 @@ interface NotesDao {
 
     @Query("DELETE FROM attachments WHERE id = :id")
     suspend fun deleteAttachment(id: Long)
+
+    @Insert
+    suspend fun insertAudioClip(clip: AudioClip): Long
+
+    @Query("SELECT * FROM audio_clips WHERE noteId = :noteId ORDER BY createdAt")
+    suspend fun audioClipsFor(noteId: Long): List<AudioClip>
+
+    @Query("DELETE FROM audio_clips WHERE id = :id")
+    suspend fun deleteAudioClip(id: Long)
 
     @Insert
     suspend fun insertVersion(version: Version): Long
@@ -262,9 +308,24 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+/** Version 5 adds repeating reminders (a repeat setting plus the occurrence anchor) and voice recordings. */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindRepeat` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindAnchor` INTEGER")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `audio_clips` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`noteId` INTEGER NOT NULL, `fileName` TEXT NOT NULL, `durationMs` INTEGER NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "FOREIGN KEY(`noteId`) REFERENCES `notes`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_clips_noteId` ON `audio_clips` (`noteId`)")
+    }
+}
+
 @Database(
-    entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, Version::class],
-    version = 4,
+    entities = [Note::class, Label::class, NoteLabel::class, Attachment::class, AudioClip::class, Version::class],
+    version = 5,
     exportSchema = false,
 )
 abstract class NotesDb : RoomDatabase() {
@@ -276,9 +337,10 @@ abstract class NotesDb : RoomDatabase() {
 
         fun get(context: Context): NotesDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, NotesDb::class.java, "notes.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
                 .also { instance = it }
         }
     }
 }
+

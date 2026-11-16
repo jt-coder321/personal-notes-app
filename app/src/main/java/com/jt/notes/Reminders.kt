@@ -116,6 +116,20 @@ object Reminders {
             .addAction(Notification.Action.Builder(icon, "Snooze $SNOOZE_MIN min", actionIntent(context, noteId, ACTION_SNOOZE)).build())
             .addAction(Notification.Action.Builder(icon, "Done", actionIntent(context, noteId, ACTION_DONE)).build())
         if (note.remindAlarm) builder.setCategory(Notification.CATEGORY_ALARM)
+        if (note.remindAlarm) {
+            // Alarm reminders take over the screen with the alarm UI. On phones
+            // where full-screen intents are not allowed, this degrades to a
+            // heads-up notification with the same Snooze and Done buttons.
+            val fullScreen = PendingIntent.getActivity(
+                context,
+                noteId.toInt(),
+                Intent(context, AlarmActivity::class.java)
+                    .putExtra(EXTRA_NOTE_ID, noteId)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.setFullScreenIntent(fullScreen, true)
+        }
         val notification = builder.build()
         // An alarm keeps ringing until you tap it, Snooze or Done.
         if (note.remindAlarm) notification.flags = notification.flags or Notification.FLAG_INSISTENT
@@ -144,13 +158,25 @@ class ReminderReceiver : BroadcastReceiver() {
                             Reminders.show(app, note, text.take(400))
                             val now = System.currentTimeMillis()
                             val next = ReminderPlan.afterFire(note.remindPings, note.remindGapMin, note.remindDone, now)
-                            dao.setReminderState(id, next.nextAt, next.done)
-                            next.nextAt?.let { Reminders.schedule(app, id, it) }
+                            // When the pings for this occurrence are done, a repeating
+                            // reminder moves on to its next occurrence instead of ending.
+                            val occurrence = if (next.nextAt == null) {
+                                val anchor = note.remindAnchor ?: note.reminderAt ?: now
+                                ReminderPlan.nextOccurrence(anchor, note.remindRepeat, now)
+                            } else null
+                            if (occurrence != null) {
+                                dao.setReminderSeries(id, occurrence, 0, occurrence)
+                                Reminders.schedule(app, id, occurrence)
+                            } else {
+                                dao.setReminderState(id, next.nextAt, next.done)
+                                next.nextAt?.let { Reminders.schedule(app, id, it) }
+                            }
                         }
                     }
                     Reminders.ACTION_DONE -> {
+                        // Done ends the whole reminder, including a repeat chain.
                         Reminders.cancel(app, id)
-                        dao.setReminderState(id, null, 0)
+                        dao.clearReminderFull(id)
                         Reminders.dismiss(app, id)
                     }
                     Reminders.ACTION_SNOOZE -> {
@@ -170,3 +196,4 @@ class ReminderReceiver : BroadcastReceiver() {
         }
     }
 }
+

@@ -79,6 +79,8 @@ object Backup {
             o.put("remindPings", n.remindPings)
             o.put("remindGapMin", n.remindGapMin)
             o.put("remindAlarm", n.remindAlarm)
+            o.put("remindRepeat", n.remindRepeat)
+            n.remindAnchor?.let { o.put("remindAnchor", it) }
             o.put("createdAt", n.createdAt)
             o.put("updatedAt", n.updatedAt)
             val names = JSONArray()
@@ -214,6 +216,8 @@ object Backup {
                     remindPings = o.optInt("remindPings", 1),
                     remindGapMin = o.optInt("remindGapMin", 5),
                     remindAlarm = o.optBoolean("remindAlarm", false),
+                    remindRepeat = o.optInt("remindRepeat", 0),
+                    remindAnchor = if (o.has("remindAnchor")) o.getLong("remindAnchor") else null,
                     createdAt = o.optLong("createdAt", System.currentTimeMillis()),
                     updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
                 )
@@ -256,3 +260,4 @@ object Backup {
     suspend fun ensureLabel(dao: NotesDao, name: String): Long =
         dao.labelByName(name)?.id ?: dao.insertLabel(Label(name = name))
 }
+

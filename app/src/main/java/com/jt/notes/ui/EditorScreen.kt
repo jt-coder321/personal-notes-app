@@ -57,19 +57,25 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jt.notes.NotesViewModel
+import com.jt.notes.ReminderPlan
 import com.jt.notes.Undo
+import com.jt.notes.data.AudioClips
 import com.jt.notes.data.CheckItem
+import com.jt.notes.data.ClipPlayer
 import com.jt.notes.data.Images
 import com.jt.notes.data.Note
 import com.jt.notes.data.NoteExport
 import com.jt.notes.data.Version
+import com.jt.notes.data.VoiceRecorder
 import com.jt.notes.data.checklistBodyToText
 import com.jt.notes.data.isBlank
 import com.jt.notes.data.itemsToBody
 import com.jt.notes.data.parseItems
 import com.jt.notes.data.textToChecklistBody
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
@@ -108,9 +114,24 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     val labels by vm.labels.collectAsStateWithLifecycle()
     val links by vm.noteLabels.collectAsStateWithLifecycle()
     val allAttachments by vm.attachments.collectAsStateWithLifecycle()
+    val allClips by vm.audioClips.collectAsStateWithLifecycle()
     val myLabelIds = remember(links, noteId) { links.filter { it.noteId == noteId }.map { it.labelId }.toSet() }
     val myLabels = labels.filter { it.id in myLabelIds }
     val pictures = allAttachments.filter { it.noteId == noteId }
+    val clips = allClips.filter { it.noteId == noteId }
+
+    // Voice notes: one recorder and one player per open note.
+    val recorder = remember(noteId) { VoiceRecorder(context) }
+    val player = remember(noteId) { ClipPlayer() }
+    var playingId by remember { mutableStateOf<Long?>(null) }
+    var isClipPlaying by remember { mutableStateOf(false) }
+    var showRecording by remember { mutableStateOf(false) }
+    var showDraw by remember { mutableStateOf(false) }
+
+    // Find in note: text mode only, selection-based navigation.
+    var findOpen by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var findIndex by remember { mutableStateOf(0) }
 
     // A brand-new note is ready to type into straight away.
     val startedBlank = remember(noteId) { note.isBlank() }
@@ -146,13 +167,24 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         delay(400)
         vm.save(note)
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.save(note) }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        vm.save(note)
+        // The app went to the background mid-recording: keep what was recorded.
+        if (recorder.isRecording) {
+            recorder.stop()?.let { vm.addAudioClip(noteId, it.first, it.second) }
+            showRecording = false
+        }
+    }
 
     val exit = remember(noteId) { ExitState() }
     val latest by rememberUpdatedState(note)
     val latestOriginal by rememberUpdatedState(original)
     DisposableEffect(noteId) {
-        onDispose { if (!exit.handled) vm.finishEditing(latest, latestOriginal) }
+        onDispose {
+            player.release()
+            recorder.cancel()
+            if (!exit.handled) vm.finishEditing(latest, latestOriginal)
+        }
     }
 
     /** Leaves the editor, writing [finalNote] (or dropping it if it is empty). */
@@ -162,6 +194,30 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         onClose()
     }
     BackHandler { leave(note) }
+
+    // ----- find in note -----
+
+    val findMatches = remember(findQuery, rich.text) { findAllMatches(rich.text, findQuery) }
+
+    /** Moves the cursor to a match, wrapping around at the ends. */
+    fun jumpToMatch(index: Int) {
+        if (findMatches.isEmpty()) return
+        val wrapped = ((index % findMatches.size) + findMatches.size) % findMatches.size
+        findIndex = wrapped
+        val start = findMatches[wrapped]
+        rich = rich.copy(selection = TextRange(start, start + findQuery.length))
+        runCatching { bodyFocus.requestFocus() }
+    }
+
+    // Typing a query jumps to its first match. Editing the note itself does
+    // not move the cursor: only the query restarts this.
+    LaunchedEffect(findQuery) {
+        if (findMatches.isNotEmpty()) {
+            findIndex = 0
+            val start = findMatches[0]
+            rich = rich.copy(selection = TextRange(start, start + findQuery.length))
+        }
+    }
 
     // ----- things that open other screens -----
 
@@ -195,6 +251,53 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         }
     }
 
+    fun startRecording() {
+        player.stop()
+        playingId = null
+        isClipPlaying = false
+        if (recorder.start()) showRecording = true else toast("Recording could not be started")
+    }
+
+    fun stopRecording(save: Boolean) {
+        if (!recorder.isRecording) {
+            showRecording = false
+            return
+        }
+        if (save) {
+            val kept = recorder.stop()
+            if (kept != null) vm.addAudioClip(noteId, kept.first, kept.second)
+            else toast("The recording could not be saved")
+        } else {
+            recorder.cancel()
+        }
+        showRecording = false
+    }
+
+    fun toggleClip(clip: com.jt.notes.data.AudioClip) {
+        if (playingId == clip.id) {
+            if (isClipPlaying) {
+                player.pause()
+                isClipPlaying = false
+            } else {
+                player.resume()
+                isClipPlaying = player.isPlaying
+            }
+        } else {
+            player.play(AudioClips.file(context, clip.fileName)) {
+                playingId = null
+                isClipPlaying = false
+            }
+            playingId = clip.id
+            isClipPlaying = true
+        }
+    }
+
+    val askMicrophone = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startRecording() else toast("Microphone permission is needed to record a voice note")
+    }
+
     fun startCamera() {
         val name = Images.newName()
         pendingPhoto = name
@@ -220,7 +323,9 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
     var pingDialogAt by remember { mutableStateOf<Long?>(null) }
 
     fun pickReminder() {
-        val existing = latest.reminderAt
+        // Pre-fill the time that was originally picked, not the next ping time
+        // the reminder has since moved on to.
+        val existing = latest.remindAnchor ?: latest.reminderAt
         val start = Calendar.getInstance().apply {
             if (existing != null) timeInMillis = existing else add(Calendar.HOUR_OF_DAY, 1)
         }
@@ -255,6 +360,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         var pings by remember(at) { mutableStateOf(latest.remindPings) }
         var gap by remember(at) { mutableStateOf(latest.remindGapMin) }
         var alarm by remember(at) { mutableStateOf(latest.remindAlarm) }
+        var repeat by remember(at) { mutableStateOf(latest.remindRepeat) }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { pingDialogAt = null },
             title = { Text("Reminder options") },
@@ -280,11 +386,27 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         Text("Loud alarm sound", Modifier.weight(1f))
                         androidx.compose.material3.Switch(checked = alarm, onCheckedChange = { alarm = it })
                     }
+                    Text("Repeat", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        RepeatChoice("Once", repeat == ReminderPlan.REPEAT_NONE) { repeat = ReminderPlan.REPEAT_NONE }
+                        RepeatChoice("Daily", repeat == ReminderPlan.REPEAT_DAILY) { repeat = ReminderPlan.REPEAT_DAILY }
+                        RepeatChoice("Weekly", repeat == ReminderPlan.REPEAT_WEEKLY) { repeat = ReminderPlan.REPEAT_WEEKLY }
+                    }
                 }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = {
-                    edit(latest.copy(reminderAt = at, remindPings = pings, remindGapMin = gap, remindAlarm = alarm, remindDone = 0))
+                    val updated = latest.copy(
+                        reminderAt = at,
+                        remindAnchor = at,
+                        remindRepeat = repeat,
+                        remindPings = pings,
+                        remindGapMin = gap,
+                        remindAlarm = alarm,
+                        remindDone = 0,
+                    )
+                    edit(updated)
+                    vm.saveReminderChange(updated)
                     vm.setReminder(noteId, at)
                     pingDialogAt = null
                     if (Build.VERSION.SDK_INT >= 33) {
@@ -378,6 +500,14 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     if (note.isChecklist) Icon(Icons.Outlined.Subject, contentDescription = "Switch to text")
                     else Icon(Icons.Outlined.CheckBox, contentDescription = "Switch to checklist")
                 }
+                if (!note.isChecklist) {
+                    IconButton(onClick = {
+                        findOpen = !findOpen
+                        if (!findOpen) findQuery = ""
+                    }) {
+                        Icon(Icons.Outlined.Search, contentDescription = "Find in note")
+                    }
+                }
                 IconButton(
                     onClick = { edit(note.copy(pinned = !note.pinned)) },
                     colors = IconButtonDefaults.iconButtonColors(
@@ -410,7 +540,12 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                             pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         }
                         EditorMenuRow("Take photo", Icons.Outlined.PhotoCamera) { menuOpen = false; startCamera() }
+                        EditorMenuRow("Add sketch", Icons.Outlined.Edit) { menuOpen = false; showDraw = true }
                         EditorMenuRow("Dictate", Icons.Outlined.Mic) { menuOpen = false; startSpeech() }
+                        EditorMenuRow("Record voice note", Icons.Outlined.Mic) {
+                            menuOpen = false
+                            askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+                        }
                         HorizontalDivider()
                         EditorMenuRow("Make a copy", Icons.Outlined.ContentCopy) {
                             menuOpen = false
@@ -432,6 +567,40 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                             menuOpen = false
                             savePdf.launch((note.title.ifBlank { "note" }).take(40) + ".pdf")
                         }
+                    }
+                }
+            }
+
+            // Find bar: text notes only. Matches move the cursor; there is no
+            // persistent highlighting.
+            if (findOpen && !note.isChecklist) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    PlainTextField(
+                        value = findQuery,
+                        onValueChange = { findQuery = it },
+                        placeholder = "Find in this note",
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (findQuery.isEmpty()) "" else if (findMatches.isEmpty()) "No matches"
+                        else "${findIndex + 1} of ${findMatches.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = p.ink.copy(alpha = 0.7f),
+                    )
+                    IconButton(onClick = { jumpToMatch(findIndex - 1) }, enabled = findMatches.isNotEmpty()) {
+                        Icon(Icons.Outlined.ExpandLess, contentDescription = "Previous match")
+                    }
+                    IconButton(onClick = { jumpToMatch(findIndex + 1) }, enabled = findMatches.isNotEmpty()) {
+                        Icon(Icons.Outlined.ExpandMore, contentDescription = "Next match")
+                    }
+                    IconButton(onClick = { findOpen = false; findQuery = "" }) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Close find")
                     }
                 }
             }
@@ -478,7 +647,14 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                                 modifier = Modifier.clickable { pickReminder() },
                             )
                             IconButton(onClick = {
-                                edit(note.copy(reminderAt = null))
+                                val cleared = note.copy(
+                                    reminderAt = null,
+                                    remindAnchor = null,
+                                    remindRepeat = 0,
+                                    remindDone = 0,
+                                )
+                                edit(cleared)
+                                vm.saveReminderChange(cleared)
                                 vm.setReminder(noteId, null)
                             }) {
                                 Icon(
@@ -519,6 +695,50 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                                             )
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                clips.forEach { clip ->
+                    key(clip.id) {
+                        Surface(
+                            shape = CircleShape,
+                            color = p.ink.copy(alpha = 0.08f),
+                            contentColor = p.ink,
+                        ) {
+                            Row(
+                                Modifier.padding(start = 6.dp, end = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                IconButton(onClick = { toggleClip(clip) }) {
+                                    Icon(
+                                        if (playingId == clip.id && isClipPlaying) Icons.Outlined.Pause
+                                        else Icons.Outlined.PlayArrow,
+                                        contentDescription = if (playingId == clip.id && isClipPlaying) "Pause" else "Play",
+                                    )
+                                }
+                                Text(
+                                    "Voice note",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(formatDuration(clip.durationMs), style = MaterialTheme.typography.labelMedium)
+                                IconButton(onClick = {
+                                    if (playingId == clip.id) {
+                                        player.stop()
+                                        playingId = null
+                                        isClipPlaying = false
+                                    }
+                                    vm.removeAudioClip(clip)
+                                }) {
+                                    Icon(
+                                        Icons.Outlined.Delete,
+                                        contentDescription = "Delete voice note",
+                                        modifier = Modifier.size(18.dp),
+                                    )
                                 }
                             }
                         }
@@ -752,6 +972,38 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                 toast("Earlier version restored")
             },
             onDismiss = { versions = null },
+        )
+    }
+    if (showDraw) {
+        DrawDialog(
+            onSave = { bitmap ->
+                showDraw = false
+                scope.launch {
+                    val name = withContext(Dispatchers.IO) { Images.saveSketch(context, bitmap) }
+                    if (name != null) vm.addImageFile(noteId, name) else toast("The sketch could not be saved")
+                }
+            },
+            onCancel = { showDraw = false },
+        )
+    }
+    if (showRecording) {
+        var elapsed by remember { mutableStateOf(0L) }
+        LaunchedEffect(Unit) {
+            while (true) {
+                delay(200)
+                elapsed = recorder.elapsedMs
+            }
+        }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { stopRecording(save = false) },
+            title = { Text("Recording") },
+            text = { Text(formatDuration(elapsed) + "\nTap Stop to keep this voice note.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { stopRecording(save = true) }) { Text("Stop") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { stopRecording(save = false) }) { Text("Cancel") }
+            },
         )
     }
 }
@@ -1027,7 +1279,45 @@ private fun reminderDetail(n: com.jt.notes.data.Note): String {
     val parts = mutableListOf<String>()
     if (n.remindPings > 1) parts.add("${n.remindPings} pings, every ${n.remindGapMin} min")
     if (n.remindAlarm) parts.add("alarm")
+    if (n.remindRepeat != ReminderPlan.REPEAT_NONE) parts.add(ReminderPlan.repeatLabel(n.remindRepeat).lowercase())
     return if (parts.isEmpty()) "" else " \u00b7 " + parts.joinToString(", ")
+}
+
+/** One choice in the reminder dialog's repeat picker. */
+@Composable
+private fun RepeatChoice(text: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        )
+    }
+}
+
+/** A length in milliseconds as m:ss. */
+private fun formatDuration(ms: Long): String {
+    val totalSeconds = (ms / 1000).toInt()
+    return "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}"
+}
+
+/** Every start offset of [query] in [text], ignoring case. Empty when the query is blank. */
+private fun findAllMatches(text: String, query: String): List<Int> {
+    if (query.isEmpty()) return emptyList()
+    val out = ArrayList<Int>()
+    var from = 0
+    while (true) {
+        val at = text.indexOf(query, from, ignoreCase = true)
+        if (at < 0) break
+        out.add(at)
+        from = at + query.length
+    }
+    return out
 }
 
 @Composable
@@ -1052,3 +1342,4 @@ private fun Stepper(label: String, value: String, onMinus: () -> Unit, onPlus: (
         ) { Text("+", style = MaterialTheme.typography.titleMedium) }
     }
 }
+

@@ -109,6 +109,8 @@ class UiTests {
         val title = unique("Archive note")
         createTextNote(title, "Bulk action")
         rule.onNodeWithContentDescription("More").performClick()
+        // The menu groups its rows: "Select notes" lives inside the View group.
+        rule.onNodeWithText("View").performClick()
         rule.onNodeWithText("Select notes").performClick()
         rule.onNodeWithText(title).performClick()
         waitForText("1 selected")
@@ -129,3 +131,4 @@ class UiTests {
         waitForTextGone("Drag a note where you want it. Your order is saved.")
     }
 }
+

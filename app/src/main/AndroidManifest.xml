@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <queries>
         <intent>
@@ -46,6 +48,26 @@
             </intent-filter>
         </receiver>
 
+        <activity
+            android:name=".AlarmActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.Notes" />
+
+        <receiver android:name=".ChecklistToggleReceiver" android:exported="false" />
+
+        <receiver
+            android:name=".ChecklistWidget"
+            android:exported="true"
+            android:label="@string/widget_checklist_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/checklist_widget_info" />
+        </receiver>
+
         <receiver
             android:name=".QuickCaptureWidget"
             android:exported="true"
@@ -82,3 +104,4 @@
     </application>
 
 </manifest>
+

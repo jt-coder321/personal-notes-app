@@ -87,6 +87,7 @@ fun HomeScreen(
     val lockOn by vm.lockEnabled.collectAsStateWithLifecycle()
     val autoFolder by vm.autoBackupFolder.collectAsStateWithLifecycle()
     val undo by vm.undo.collectAsStateWithLifecycle()
+    val reminders by vm.reminders.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     var searching by rememberSaveable { mutableStateOf(false) }
@@ -98,6 +99,7 @@ fun HomeScreen(
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showAutoBackupDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
+    var showReminders by remember { mutableStateOf(false) }
     val themeId by vm.theme.collectAsStateWithLifecycle()
     var exportPassword by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf(setOf<Long>()) }
@@ -302,6 +304,9 @@ fun HomeScreen(
                                             arrangeList = null
                                             selectMode = true
                                         }
+                                    }
+                                    MenuRow("Reminders", Icons.Outlined.Alarm) {
+                                        menuOpen = false; showReminders = true
                                     }
                                 }
                                 HorizontalDivider()
@@ -577,6 +582,14 @@ fun HomeScreen(
 
     if (showManageLabels) {
         ManageLabelsDialog(vm = vm, labels = labels, onDismiss = { showManageLabels = false })
+    }
+    if (showReminders) {
+        RemindersListDialog(
+            notes = reminders,
+            onOpen = { id -> showReminders = false; onOpen(id) },
+            onClear = { id -> vm.clearReminder(id) },
+            onDismiss = { showReminders = false },
+        )
     }
     if (showBackupDialog) {
         BackupDialog(
@@ -1136,6 +1149,7 @@ private fun appVersion(): String {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
 }
+
 
 
 

@@ -7,6 +7,8 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jt.notes.data.Attachment
+import com.jt.notes.data.AudioClip
+import com.jt.notes.data.AudioClips
 import com.jt.notes.data.Backup
 import com.jt.notes.data.Images
 import com.jt.notes.data.KeepImport
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -94,6 +97,15 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     val attachments: StateFlow<List<Attachment>> =
         dao.observeAttachments().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    val audioClips: StateFlow<List<AudioClip>> =
+        dao.observeAudioClips().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Notes with a reminder still to come, soonest first. */
+    val reminders: StateFlow<List<Note>> =
+        dao.observeNotes()
+            .map { notes -> notes.filter { it.reminderAt != null && it.trashedAt == null }.sortedBy { it.reminderAt } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     private val allItems =
         combine(dao.observeNotes(), noteLabels, labels, attachments) { notes, links, labels, attachments ->
             val labelsById = labels.associateBy { it.id }
@@ -160,6 +172,26 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun keepPosition(note: Note): Note =
         dao.getNote(note.id)?.let { note.copy(position = it.position) } ?: note
 
+    /**
+     * The reminder's progress (the next ping, how many pings were sent, the
+     * current occurrence) is owned by the alarm receiver, not the editor: a
+     * ping that fires while the note is open must not be written back over by
+     * the editor's older copy. Reminder changes the person makes in the editor
+     * go through [saveReminderChange] instead.
+     */
+    private suspend fun keepReminderState(note: Note): Note =
+        dao.getNote(note.id)?.let {
+            note.copy(
+                reminderAt = it.reminderAt,
+                remindPings = it.remindPings,
+                remindGapMin = it.remindGapMin,
+                remindAlarm = it.remindAlarm,
+                remindDone = it.remindDone,
+                remindRepeat = it.remindRepeat,
+                remindAnchor = it.remindAnchor,
+            )
+        } ?: note
+
     /** Saves the order the notes were dragged into, and switches to "My order". */
     fun saveOrder(orderedIds: List<Long>) {
         viewModelScope.launch {
@@ -213,8 +245,17 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun getNote(id: Long): Note? = writeLock.withLock { dao.getNote(id) }
 
-    /** Writes the note exactly as given. */
+    /** Writes the note exactly as given, except the drag order and reminder progress, which belong to others. */
     fun save(note: Note) {
+        viewModelScope.launch { writeLock.withLock { dao.updateNote(keepPosition(keepReminderState(note))) } }
+    }
+
+    /**
+     * Writes a reminder the person just set or cleared in the editor, including
+     * its repeat. Only the editor's reminder actions use this; every other
+     * save keeps the receiver's reminder progress.
+     */
+    fun saveReminderChange(note: Note) {
         viewModelScope.launch { writeLock.withLock { dao.updateNote(keepPosition(note)) } }
     }
 
@@ -226,10 +267,10 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
     fun finishEditing(note: Note, original: Note? = null, offerUndo: Undo? = null) {
         viewModelScope.launch {
             writeLock.withLock {
-                if (note.isBlank() && dao.attachmentsFor(note.id).isEmpty()) {
+                if (note.isBlank() && dao.attachmentsFor(note.id).isEmpty() && dao.audioClipsFor(note.id).isEmpty()) {
                     dao.deleteNote(note.id)
                 } else {
-                    dao.updateNote(keepPosition(note))
+                    dao.updateNote(keepPosition(keepReminderState(note)))
                     if (original != null && !original.isBlank() &&
                         (original.title != note.title || original.body != note.body)
                     ) {
@@ -321,6 +362,9 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
                             pinned = false,
                             trashedAt = null,
                             reminderAt = null,
+                            remindDone = 0,
+                            remindRepeat = 0,
+                            remindAnchor = null,
                             createdAt = now,
                             updatedAt = now,
                         )
@@ -342,11 +386,34 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
 
     // ----- reminders -----
 
-    /** Opening a reminder notification counts as seeing it, so the remaining pings stop. */
+    /**
+     * Opening a reminder notification counts as seeing it, so the remaining
+     * pings stop. A repeating reminder moves on to its next occurrence
+     * instead of ending.
+     */
     fun acknowledgeReminder(noteId: Long) {
         viewModelScope.launch {
             Reminders.cancel(context, noteId)
-            dao.setReminderState(noteId, null, 0)
+            val note = dao.getNote(noteId)
+            val anchor = note?.remindAnchor ?: note?.reminderAt
+            val occurrence = if (note != null && anchor != null) {
+                ReminderPlan.nextOccurrence(anchor, note.remindRepeat, System.currentTimeMillis())
+            } else null
+            if (occurrence != null) {
+                dao.setReminderSeries(noteId, occurrence, 0, occurrence)
+                Reminders.schedule(context, noteId, occurrence)
+            } else {
+                dao.clearReminderFull(noteId)
+            }
+        }
+    }
+
+    /** Clears a reminder entirely, including its repeat chain. */
+    fun clearReminder(noteId: Long) {
+        viewModelScope.launch {
+            Reminders.cancel(context, noteId)
+            dao.clearReminderFull(noteId)
+            Reminders.dismiss(context, noteId)
         }
     }
 
@@ -379,6 +446,28 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             dao.deleteAttachment(attachment.id)
             withContext(Dispatchers.IO) { Images.file(context, attachment.fileName).delete() }
+        }
+    }
+
+    // ----- voice notes -----
+
+    fun addAudioClip(noteId: Long, fileName: String, durationMs: Long) {
+        viewModelScope.launch {
+            dao.insertAudioClip(
+                AudioClip(
+                    noteId = noteId,
+                    fileName = fileName,
+                    durationMs = durationMs,
+                    createdAt = System.currentTimeMillis(),
+                )
+            )
+        }
+    }
+
+    fun removeAudioClip(clip: AudioClip) {
+        viewModelScope.launch {
+            dao.deleteAudioClip(clip.id)
+            withContext(Dispatchers.IO) { AudioClips.file(context, clip.fileName).delete() }
         }
     }
 
@@ -536,3 +625,4 @@ class NotesViewModel(app: Application) : AndroidViewModel(app) {
         autoBackupFolder.value = uri?.toString()
     }
 }
+

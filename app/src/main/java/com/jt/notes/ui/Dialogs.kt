@@ -17,9 +17,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.jt.notes.NotesViewModel
+import com.jt.notes.ReminderPlan
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import com.jt.notes.data.Label
+import com.jt.notes.data.Note
 import com.jt.notes.data.Version
 import com.jt.notes.data.checklistBodyToText
 import java.text.DateFormat
@@ -256,6 +258,57 @@ fun PasswordDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     )
 }
 
+/** Lists every note with a reminder still to come. Tapping one opens it; the X clears its reminder. */
+@Composable
+fun RemindersListDialog(
+    notes: List<Note>,
+    onOpen: (Long) -> Unit,
+    onClear: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Reminders") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (notes.isEmpty()) {
+                    Text("No reminders set. Open a note and tap Remind me to add one.")
+                }
+                notes.forEach { note ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpen(note.id) }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                note.title.ifBlank {
+                                    (if (note.isChecklist) checklistBodyToText(note.body) else note.body)
+                                        .lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: "Empty note"
+                                },
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                formatReminder(note.reminderAt ?: 0L) + " \u00b7 " +
+                                    ReminderPlan.repeatLabel(note.remindRepeat),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        IconButton(onClick = { onClear(note.id) }) {
+                            Icon(Icons.Outlined.Close, contentDescription = "Clear reminder")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
 /** Lists earlier versions of a note. Tapping one brings its text back. */
 @Composable
 fun VersionHistoryDialog(versions: List<Version>, onRestore: (Version) -> Unit, onDismiss: () -> Unit) {
@@ -294,3 +347,4 @@ fun VersionHistoryDialog(versions: List<Version>, onRestore: (Version) -> Unit, 
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }
+
