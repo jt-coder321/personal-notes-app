@@ -65,6 +65,7 @@ import com.jt.notes.NoteAuth
 import com.jt.notes.PinnedNote
 import com.jt.notes.PlaceReminders
 import com.jt.notes.ReminderPlan
+import com.jt.notes.ReminderTime
 import com.jt.notes.Undo
 import com.jt.notes.data.AudioClips
 import com.jt.notes.data.CheckItem
@@ -482,12 +483,37 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
         var gap by remember(at) { mutableStateOf(latest.remindGapMin) }
         var alarm by remember(at) { mutableStateOf(latest.remindAlarm) }
         var repeat by remember(at) { mutableStateOf(latest.remindRepeat) }
+        // A plain-language time ("tomorrow 9am") overrides the picked time.
+        // Nothing is guessed: an unparseable phrase leaves the picked time
+        // in place and says so.
+        var typedTime by remember(at) { mutableStateOf("") }
+        val parsedAt = remember(typedTime) {
+            if (typedTime.isBlank()) null else ReminderTime.parse(typedTime, System.currentTimeMillis())
+        }
+        val chosenAt = parsedAt ?: at
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { pingDialogAt = null },
             title = { Text("Reminder options") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(formatReminder(at), style = MaterialTheme.typography.titleSmall)
+                    OutlinedTextField(
+                        value = typedTime,
+                        onValueChange = { typedTime = it },
+                        placeholder = { Text("e.g., tomorrow 9am") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (typedTime.isNotBlank() && parsedAt == null) {
+                        Text(
+                            "Couldn't understand that time. The picked time below will be used.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = p.muted,
+                        )
+                    }
+                    Text(
+                        if (parsedAt != null) ReminderTime.format(parsedAt) else formatReminder(at),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
                     val gaps = listOf(1, 2, 3, 5, 10, 15, 20, 30, 45, 60)
                     Stepper(
                         label = "Number of pings",
@@ -518,8 +544,8 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     val updated = latest.copy(
-                        reminderAt = at,
-                        remindAnchor = at,
+                        reminderAt = chosenAt,
+                        remindAnchor = chosenAt,
                         remindRepeat = repeat,
                         remindPings = pings,
                         remindGapMin = gap,
@@ -528,7 +554,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     )
                     edit(updated)
                     vm.saveReminderChange(updated)
-                    vm.setReminder(noteId, at)
+                    vm.setReminder(noteId, chosenAt)
                     pingDialogAt = null
                     if (Build.VERSION.SDK_INT >= 33) {
                         askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
