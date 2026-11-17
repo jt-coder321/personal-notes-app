@@ -180,6 +180,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
 
     var showLabels by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    var expandedEditorMenuGroup by remember { mutableStateOf<String?>(null) }
     var pinned by remember(noteId) { mutableStateOf(PinnedNote.isPinned(context, noteId)) }
     var versions by remember { mutableStateOf<List<Version>?>(null) }
     var pendingPhoto by rememberSaveable { mutableStateOf<String?>(null) }
@@ -700,102 +701,132 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     else Icon(Icons.Outlined.Archive, contentDescription = "Archive")
                 }
                 Box {
-                    IconButton(onClick = { menuOpen = true }) {
+                    IconButton(onClick = { expandedEditorMenuGroup = null; menuOpen = true }) {
                         Icon(Icons.Outlined.MoreVert, contentDescription = "More")
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        EditorMenuRow(
-                            if (note.reminderAt == null) "Remind me" else "Change reminder",
-                            Icons.Outlined.Alarm,
-                        ) { menuOpen = false; pickReminder() }
-                        EditorMenuRow("Remind me at a place", Icons.Outlined.LocationOn) {
-                            menuOpen = false
-                            showPlaceDialog = true
-                        }
-                        EditorMenuRow("Add picture", Icons.Outlined.Image) {
-                            menuOpen = false
-                            pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        }
-                        EditorMenuRow("Take photo", Icons.Outlined.PhotoCamera) { menuOpen = false; startCamera() }
-                        EditorMenuRow("Scan text from photo", Icons.Outlined.DocumentScanner) {
-                            menuOpen = false; showOcrChoice = true
-                        }
-                        EditorMenuRow("Add sketch", Icons.Outlined.Edit) { menuOpen = false; showDraw = true }
-                        EditorMenuRow("Dictate", Icons.Outlined.Mic) { menuOpen = false; startSpeech() }
-                        EditorMenuRow("Record voice note", Icons.Outlined.Mic) {
-                            menuOpen = false
-                            askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                        HorizontalDivider()
-                        EditorMenuRow("Make a copy", Icons.Outlined.ContentCopy) {
-                            menuOpen = false
-                            vm.duplicate(listOf(note)) { toast("Copy made") }
-                        }
-                        if (note.isChecklist) {
-                            EditorMenuRow("Copy with boxes cleared", Icons.Outlined.LibraryAddCheck) {
-                                menuOpen = false
-                                vm.duplicate(listOf(note), clearBoxes = true) { toast("Fresh copy made") }
-                            }
-                        }
-                        EditorMenuRow("Version history", Icons.Outlined.History) {
-                            menuOpen = false
-                            scope.launch { versions = vm.versions(noteId) }
-                        }
-                        EditorMenuRow("Save as template", Icons.Outlined.Description) {
-                            menuOpen = false
-                            if (note.title.isBlank() && note.body.isBlank()) {
-                                toast("Nothing to save yet")
-                            } else {
-                                vm.saveTemplate(note.title, note.body, note.isChecklist)
-                                toast("Template saved")
-                            }
-                        }
-                        EditorMenuRow(
-                            if (note.locked) "Unlock note" else "Lock note",
-                            if (note.locked) Icons.Outlined.LockOpen else Icons.Outlined.Lock,
-                        ) {
-                            menuOpen = false
-                            val locking = !note.locked
-                            vm.setNoteLocked(noteId, locking)
-                            edit(note.copy(locked = locking))
-                            if (locking) noteUnlocked = false
-                        }
-                        if (!note.locked) {
+                        EditorMenuGroupHeader(
+                            text = "Remind",
+                            icon = Icons.Outlined.Alarm,
+                            expanded = expandedEditorMenuGroup == "remind",
+                            onClick = { expandedEditorMenuGroup = if (expandedEditorMenuGroup == "remind") null else "remind" },
+                        )
+                        if (expandedEditorMenuGroup == "remind") {
                             EditorMenuRow(
-                                if (pinned) "Unpin from notifications" else "Pin to notifications",
-                                if (pinned) Icons.Outlined.NotificationsOff else Icons.Outlined.Notifications,
+                                if (note.reminderAt == null) "Remind me" else "Change reminder",
+                                Icons.Outlined.Alarm,
+                            ) { menuOpen = false; pickReminder() }
+                            EditorMenuRow("Remind me at a place", Icons.Outlined.LocationOn) {
+                                menuOpen = false
+                                showPlaceDialog = true
+                            }
+                        }
+                        EditorMenuGroupHeader(
+                            text = "Add to note",
+                            icon = Icons.Outlined.Add,
+                            expanded = expandedEditorMenuGroup == "add",
+                            onClick = { expandedEditorMenuGroup = if (expandedEditorMenuGroup == "add") null else "add" },
+                        )
+                        if (expandedEditorMenuGroup == "add") {
+                            EditorMenuRow("Add picture", Icons.Outlined.Image) {
+                                menuOpen = false
+                                pickPicture.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                            EditorMenuRow("Take photo", Icons.Outlined.PhotoCamera) { menuOpen = false; startCamera() }
+                            EditorMenuRow("Scan text from photo", Icons.Outlined.DocumentScanner) {
+                                menuOpen = false; showOcrChoice = true
+                            }
+                            EditorMenuRow("Add sketch", Icons.Outlined.Edit) { menuOpen = false; showDraw = true }
+                            EditorMenuRow("Dictate", Icons.Outlined.Mic) { menuOpen = false; startSpeech() }
+                            EditorMenuRow("Record voice note", Icons.Outlined.Mic) {
+                                menuOpen = false
+                                askMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        }
+                        EditorMenuGroupHeader(
+                            text = "Note actions",
+                            icon = Icons.Outlined.MoreHoriz,
+                            expanded = expandedEditorMenuGroup == "actions",
+                            onClick = { expandedEditorMenuGroup = if (expandedEditorMenuGroup == "actions") null else "actions" },
+                        )
+                        if (expandedEditorMenuGroup == "actions") {
+                            EditorMenuRow("Make a copy", Icons.Outlined.ContentCopy) {
+                                menuOpen = false
+                                vm.duplicate(listOf(note)) { toast("Copy made") }
+                            }
+                            if (note.isChecklist) {
+                                EditorMenuRow("Copy with boxes cleared", Icons.Outlined.LibraryAddCheck) {
+                                    menuOpen = false
+                                    vm.duplicate(listOf(note), clearBoxes = true) { toast("Fresh copy made") }
+                                }
+                            }
+                            EditorMenuRow("Version history", Icons.Outlined.History) {
+                                menuOpen = false
+                                scope.launch { versions = vm.versions(noteId) }
+                            }
+                            EditorMenuRow("Save as template", Icons.Outlined.Description) {
+                                menuOpen = false
+                                if (note.title.isBlank() && note.body.isBlank()) {
+                                    toast("Nothing to save yet")
+                                } else {
+                                    vm.saveTemplate(note.title, note.body, note.isChecklist)
+                                    toast("Template saved")
+                                }
+                            }
+                            EditorMenuRow(
+                                if (note.locked) "Unlock note" else "Lock note",
+                                if (note.locked) Icons.Outlined.LockOpen else Icons.Outlined.Lock,
                             ) {
                                 menuOpen = false
-                                if (pinned) {
-                                    PinnedNote.unpin(context)
-                                    pinned = false
-                                } else {
-                                    PinnedNote.pin(context, latest)
-                                    pinned = true
+                                val locking = !note.locked
+                                vm.setNoteLocked(noteId, locking)
+                                edit(note.copy(locked = locking))
+                                if (locking) noteUnlocked = false
+                            }
+                            if (!note.locked) {
+                                EditorMenuRow(
+                                    if (pinned) "Unpin from notifications" else "Pin to notifications",
+                                    if (pinned) Icons.Outlined.NotificationsOff else Icons.Outlined.Notifications,
+                                ) {
+                                    menuOpen = false
+                                    if (pinned) {
+                                        PinnedNote.unpin(context)
+                                        pinned = false
+                                    } else {
+                                        PinnedNote.pin(context, latest)
+                                        pinned = true
+                                    }
                                 }
                             }
-                        }
-                        EditorMenuRow("Merge into another note", Icons.Outlined.MergeType) {
-                            menuOpen = false; showMergePicker = true
-                        }
-                        EditorMenuRow("Focus mode", Icons.Outlined.Fullscreen) {
-                            menuOpen = false; focusMode = true
-                        }
-                        HorizontalDivider()
-                        EditorMenuRow("Share as text", Icons.Outlined.Share) { menuOpen = false; shareAsText() }
-                        EditorMenuRow("Share as image", Icons.Outlined.Image) {
-                            menuOpen = false
-                            scope.launch {
-                                val file = withContext(Dispatchers.IO) {
-                                    runCatching { NoteImageShare.renderToFile(context, latest) }.getOrNull()
-                                }
-                                if (file == null) toast("The image could not be shared")
-                                else NoteImageShare.shareFile(context, file, latest.title)
+                            EditorMenuRow("Merge into another note", Icons.Outlined.MergeType) {
+                                menuOpen = false; showMergePicker = true
+                            }
+                            EditorMenuRow("Focus mode", Icons.Outlined.Fullscreen) {
+                                menuOpen = false; focusMode = true
                             }
                         }
-                        EditorMenuRow("Save as PDF", Icons.Outlined.PictureAsPdf) {
-                            menuOpen = false
-                            savePdf.launch((note.title.ifBlank { "note" }).take(40) + ".pdf")
+                        EditorMenuGroupHeader(
+                            text = "Share and export",
+                            icon = Icons.Outlined.Share,
+                            expanded = expandedEditorMenuGroup == "share",
+                            onClick = { expandedEditorMenuGroup = if (expandedEditorMenuGroup == "share") null else "share" },
+                        )
+                        if (expandedEditorMenuGroup == "share") {
+                            EditorMenuRow("Share as text", Icons.Outlined.Share) { menuOpen = false; shareAsText() }
+                            EditorMenuRow("Share as image", Icons.Outlined.Image) {
+                                menuOpen = false
+                                scope.launch {
+                                    val file = withContext(Dispatchers.IO) {
+                                        runCatching { NoteImageShare.renderToFile(context, latest) }.getOrNull()
+                                    }
+                                    if (file == null) toast("The image could not be shared")
+                                    else NoteImageShare.shareFile(context, file, latest.title)
+                                }
+                            }
+                            EditorMenuRow("Save as PDF", Icons.Outlined.PictureAsPdf) {
+                                menuOpen = false
+                                savePdf.launch((note.title.ifBlank { "note" }).take(40) + ".pdf")
+                            }
                         }
                     }
                 }
@@ -1423,6 +1454,26 @@ private fun EditorMenuRow(text: String, icon: ImageVector, onClick: () -> Unit) 
     DropdownMenuItem(
         text = { Text(text) },
         leadingIcon = { Icon(icon, contentDescription = null) },
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun EditorMenuGroupHeader(
+    text: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(text, fontWeight = FontWeight.SemiBold) },
+        leadingIcon = { Icon(icon, contentDescription = null) },
+        trailingIcon = {
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+            )
+        },
         onClick = onClick,
     )
 }
