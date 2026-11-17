@@ -314,6 +314,12 @@ fun HomeScreen(
                         Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        LauncherIcon(
+                            cornerRadius = 10.dp,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp)),
+                        )
                         BackupStatus(lastBackup = lastBackup, onClick = { showBackupDialog = true })
                         Spacer(Modifier.weight(1f))
                         IconButton(onClick = { searching = true }) {
@@ -434,13 +440,6 @@ fun HomeScreen(
                             }
                         }
                     }
-                    LauncherIcon(
-                        cornerRadius = 10.dp,
-                        modifier = Modifier
-                            .padding(start = 24.dp, top = 4.dp, bottom = 8.dp)
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(10.dp)),
-                    )
                 }
 
                 LazyRow(
