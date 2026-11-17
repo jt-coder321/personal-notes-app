@@ -39,7 +39,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -1211,12 +1210,11 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
             }
 
             // Bottom: formatting for text notes and when it was last edited, then the tool bar
-            // The live word count sits at the end of the formatting row, so it never overlaps it.
+            // The live word count sits on its own line under the formatting grid.
             val words = remember(note.body, note.isChecklist) { countWords(note) }
             if (!focusMode) {
-            Row(
+            Column(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 20.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (!note.isChecklist) {
                     fun apply(next: Rich) {
@@ -1226,7 +1224,11 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         if (markdown != note.body) edit(note.copy(body = markdown))
                     }
                     val marker = lineMarker(rich)
-                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         FormatButton(isHeadingOn(rich, Fmt.H1), p.accent, { apply(toggleHeading(rich, Fmt.H1)) }) {
                             Icon(Icons.Outlined.Title, contentDescription = "Heading")
                         }
@@ -1242,6 +1244,12 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                         FormatButton(isInlineOn(rich, Fmt.STRIKE), p.accent, { apply(toggleInline(rich, Fmt.STRIKE)) }) {
                             Icon(Icons.Outlined.FormatStrikethrough, contentDescription = "Strikethrough")
                         }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         FormatButton(isInlineOn(rich, Fmt.UNDERLINE), p.accent, { apply(toggleInline(rich, Fmt.UNDERLINE)) }) {
                             Icon(Icons.Outlined.FormatUnderlined, contentDescription = "Underline")
                         }
@@ -1258,19 +1266,21 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                             Icon(Icons.Outlined.FormatQuote, contentDescription = "Quote")
                         }
                     }
-                } else {
-                    Spacer(Modifier.weight(1f))
                 }
                 Text(
                     wordCountLabel(words),
                     style = MaterialTheme.typography.labelSmall,
                     color = p.ink.copy(alpha = 0.6f),
                     maxLines = 1,
-                    modifier = Modifier.padding(start = 8.dp),
+                    modifier = Modifier.align(Alignment.End),
                 )
             }
             }
             if (!focusMode) {
+            ColorStrip(
+                selected = note.color,
+                onSelect = { edit(note.copy(color = it)) },
+            )
             Surface(
                 shape = CircleShape,
                 color = p.bar,
@@ -1285,12 +1295,7 @@ fun EditorScreen(vm: NotesViewModel, noteId: Long, embedded: Boolean, onClose: (
                     Modifier.padding(start = 12.dp, end = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    ColorRow(
-                        selected = note.color,
-                        barColor = p.bar,
-                        onSelect = { edit(note.copy(color = it)) },
-                        modifier = Modifier.weight(1f),
-                    )
+                    Spacer(Modifier.weight(1f))
                     IconButton(onClick = { showLabels = true }) {
                         Icon(Icons.AutoMirrored.Outlined.Label, contentDescription = "Labels")
                     }
@@ -1511,53 +1516,49 @@ private fun LockGate(
     }
 }
 
-/** The note color choices. Edge fades show the row scrolls: the trailing fade
- * is visible while more colors lie beyond the visible ones, and the leading
- * fade appears once the row is scrolled. Taps pass through the fades to the
- * dots beneath them. */
+/** All eight note colors in one full-width strip above the bottom pill.
+ * Every swatch is always visible: the dots share the width evenly, so the
+ * strip never scrolls and nothing can clip at either edge. */
 @Composable
-private fun ColorRow(
+private fun ColorStrip(
     selected: Int,
-    barColor: Color,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val scroll = rememberScrollState()
-    Box(modifier) {
+    val p = LocalPalette.current
+    Surface(
+        shape = CircleShape,
+        color = p.bar,
+        contentColor = p.onBar,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+            .height(48.dp),
+    ) {
         Row(
-            Modifier.horizontalScroll(scroll),
+            Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             NoteColors.indices.forEach { index ->
-                ColorDot(
-                    index = index,
-                    selected = index == selected || (index == 0 && selected !in NoteColors.indices),
-                    onClick = { onSelect(index) },
-                )
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    ColorDot(
+                        index = index,
+                        selected = index == selected || (index == 0 && selected !in NoteColors.indices),
+                        onClick = { onSelect(index) },
+                    )
+                }
             }
-        }
-        if (scroll.value > 0) {
-            Box(
-                Modifier.align(Alignment.CenterStart).width(28.dp).fillMaxHeight()
-                    .background(Brush.horizontalGradient(listOf(barColor, Color.Transparent)))
-            )
-        }
-        if (scroll.value < scroll.maxValue) {
-            Box(
-                Modifier.align(Alignment.CenterEnd).width(28.dp).fillMaxHeight()
-                    .background(Brush.horizontalGradient(listOf(Color.Transparent, barColor)))
-            )
         }
     }
 }
 
-/** One color choice in the tool bar. Index 0 is "no color". */
+/** One color choice in the color strip. Index 0 is "no color". */
 @Composable
 private fun ColorDot(index: Int, selected: Boolean, onClick: () -> Unit) {
     val p = LocalPalette.current
     val label = if (index == 0) "No color" else "Color $index"
     Box(
-        Modifier.size(44.dp).clip(CircleShape).clickable(onClickLabel = label, onClick = onClick),
+        Modifier.size(36.dp).clip(CircleShape).clickable(onClickLabel = label, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Box(
