@@ -1,0 +1,13 @@
+SKIP  upgrade: the older build was not available to download
+PASS  share: text shared from another app opens as a note
+PASS  share: the shared title is in the editor
+PASS  home: the shared note is listed
+PASS  widget action: new checklist opens
+PASS  checklist: typed item shows
+PASS  dark mode: home
+PASS  unfolded size: list
+PASS  unfolded size: note beside the list
+PASS  unfolded size: list and note are both on screen
+PASS  unfolded size: the open note is on screen
+PASS  folding back keeps the app running
+PASS  instrumented tests (data logic and screen flows)
