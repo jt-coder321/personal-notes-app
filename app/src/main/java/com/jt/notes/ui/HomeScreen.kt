@@ -54,7 +54,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,7 +64,6 @@ import com.jt.notes.Filter
 import com.jt.notes.MainActivity
 import com.jt.notes.NoteItem
 import com.jt.notes.NotesViewModel
-import com.jt.notes.R
 import com.jt.notes.Sort
 import com.jt.notes.data.LinkPreview
 import com.jt.notes.data.LinkPreviews
@@ -436,9 +434,8 @@ fun HomeScreen(
                             }
                         }
                     }
-                    Image(
-                        painter = painterResource(R.mipmap.ic_launcher),
-                        contentDescription = null,
+                    LauncherIcon(
+                        cornerRadius = 10.dp,
                         modifier = Modifier
                             .padding(start = 24.dp, top = 4.dp, bottom = 8.dp)
                             .size(40.dp)

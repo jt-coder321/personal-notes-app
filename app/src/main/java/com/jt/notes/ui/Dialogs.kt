@@ -11,7 +11,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -26,13 +25,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.jt.notes.LabelTree
 import com.jt.notes.NotesViewModel
 import com.jt.notes.PlaceReminders
-import com.jt.notes.R
 import com.jt.notes.ReminderPlan
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -728,9 +725,8 @@ fun WhatsNewDialog(version: String, notes: List<String>, onDismiss: () -> Unit) 
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
-            Image(
-                painter = painterResource(R.mipmap.ic_launcher),
-                contentDescription = null,
+            LauncherIcon(
+                cornerRadius = 16.dp,
                 modifier = Modifier.size(64.dp).clip(RoundedCornerShape(16.dp)),
             )
         },
