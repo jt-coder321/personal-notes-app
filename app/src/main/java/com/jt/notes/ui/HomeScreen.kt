@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -466,6 +467,8 @@ fun HomeScreen(
                 val arranging = arrangeList != null
                 // Holding a note starts arranging, except in the Trash, in search, or while notes are selected.
                 val canReorder = arranging || (!inTrash && query.isEmpty() && !selecting && !selectMode)
+                // Swiping archives or trashes a note, except in the Trash, while arranging, or while notes are selected.
+                val swipeEnabled = !arranging && !selecting && !selectMode && !inTrash
                 val pinned = if (inTrash) emptyList() else shownNotes.filter { it.note.pinned }
                 val others = if (inTrash) shownNotes else shownNotes.filter { !it.note.pinned }
 
@@ -558,6 +561,57 @@ fun HomeScreen(
                                 SectionHeader("Pinned", showPin = true)
                             }
                             gridItems(pinned, key = { it.note.id }) { item ->
+                                SwipeableNoteCard(
+                                    enabled = swipeEnabled,
+                                    archived = item.note.archived,
+                                    onSwipeRight = { vm.setArchived(listOf(item.note), !item.note.archived) },
+                                    onSwipeLeft = { vm.trash(listOf(item.note)) },
+                                ) {
+                                    ReorderableItem(reorderState, key = item.note.id, enabled = canReorder) { isDragging ->
+                                        NoteCard(
+                                            item = item,
+                                            open = item.note.id == selectedId,
+                                            checked = item.note.id in selection,
+                                            onClick = { onCardClick(item) },
+                                            onLongClick = {
+                                                if (canReorder) {
+                                                    if (arrangeList == null) {
+                                                        arrangeList = notes
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    }
+                                                } else toggle(item.note.id)
+                                            },
+                                            jiggle = arranging,
+                                            arrange = arranging,
+                                            dragging = isDragging,
+                                            handle = Modifier.longPressDraggableHandle(
+                                                enabled = canReorder,
+                                                onDragStarted = {
+                                                    if (arrangeList == null) arrangeList = notes
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                },
+                                                onDragStopped = {
+                                                    val l = arrangeList
+                                                    if (l != null && l.map { it.note.id } != notes.map { it.note.id }) vm.saveOrder(l.map { it.note.id })
+                                                },
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                            if (others.isNotEmpty()) {
+                                item(key = "header-others", span = StaggeredGridItemSpan.FullLine) {
+                                    SectionHeader("Others", showPin = false)
+                                }
+                            }
+                        }
+                        gridItems(others, key = { it.note.id }) { item ->
+                            SwipeableNoteCard(
+                                enabled = swipeEnabled,
+                                archived = item.note.archived,
+                                onSwipeRight = { vm.setArchived(listOf(item.note), !item.note.archived) },
+                                onSwipeLeft = { vm.trash(listOf(item.note)) },
+                            ) {
                                 ReorderableItem(reorderState, key = item.note.id, enabled = canReorder) { isDragging ->
                                     NoteCard(
                                         item = item,
@@ -588,43 +642,6 @@ fun HomeScreen(
                                         ),
                                     )
                                 }
-                            }
-                            if (others.isNotEmpty()) {
-                                item(key = "header-others", span = StaggeredGridItemSpan.FullLine) {
-                                    SectionHeader("Others", showPin = false)
-                                }
-                            }
-                        }
-                        gridItems(others, key = { it.note.id }) { item ->
-                            ReorderableItem(reorderState, key = item.note.id, enabled = canReorder) { isDragging ->
-                                NoteCard(
-                                    item = item,
-                                    open = item.note.id == selectedId,
-                                    checked = item.note.id in selection,
-                                    onClick = { onCardClick(item) },
-                                    onLongClick = {
-                                        if (canReorder) {
-                                            if (arrangeList == null) {
-                                                arrangeList = notes
-                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            }
-                                        } else toggle(item.note.id)
-                                    },
-                                    jiggle = arranging,
-                                    arrange = arranging,
-                                    dragging = isDragging,
-                                    handle = Modifier.longPressDraggableHandle(
-                                        enabled = canReorder,
-                                        onDragStarted = {
-                                            if (arrangeList == null) arrangeList = notes
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        },
-                                        onDragStopped = {
-                                            val l = arrangeList
-                                            if (l != null && l.map { it.note.id } != notes.map { it.note.id }) vm.saveOrder(l.map { it.note.id })
-                                        },
-                                    ),
-                                )
                             }
                         }
                     }
@@ -1080,6 +1097,84 @@ private fun rememberWiggle(active: Boolean, seed: Long): State<Float> =
     } else {
         remember { mutableStateOf(0f) }
     }
+
+/**
+ * A note card that swipes sideways: right archives (or unarchives an archived
+ * note), left moves it to Trash. The actions run through the same ViewModel
+ * paths as the selection bar, so Undo works the same way. The card itself is
+ * untouched: taps, long-press, and the drag handle all behave as before.
+ */
+@Composable
+private fun SwipeableNoteCard(
+    enabled: Boolean,
+    archived: Boolean,
+    onSwipeRight: () -> Unit,
+    onSwipeLeft: () -> Unit,
+    card: @Composable () -> Unit,
+) {
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.StartToEnd -> { onSwipeRight(); false }
+                SwipeToDismissBoxValue.EndToStart -> { onSwipeLeft(); false }
+                SwipeToDismissBoxValue.Settled -> false
+            }
+        }
+    )
+    SwipeToDismissBox(
+        state = state,
+        backgroundContent = { SwipeBackground(direction = state.dismissDirection, archived = archived) },
+        modifier = Modifier.fillMaxWidth(),
+        enableDismissFromStartToEnd = enabled,
+        enableDismissFromEndToStart = enabled,
+        content = { card() },
+    )
+}
+
+/**
+ * The icon and label revealed behind a card while it is swiped. It carries no
+ * semantics, so the tests still see exactly one "Archive" and one "Trash".
+ */
+@Composable
+private fun SwipeBackground(direction: SwipeToDismissBoxValue, archived: Boolean) {
+    if (direction == SwipeToDismissBoxValue.Settled) return
+    val p = LocalPalette.current
+    val toEnd = direction == SwipeToDismissBoxValue.StartToEnd
+    val background = if (toEnd) p.accent else MaterialTheme.colorScheme.error
+    val onBackground = if (toEnd) p.onAccent else MaterialTheme.colorScheme.onError
+    val icon = if (toEnd) {
+        if (archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive
+    } else {
+        Icons.Outlined.Delete
+    }
+    val label = if (toEnd) {
+        if (archived) "Unarchive" else "Archive"
+    } else {
+        "Trash"
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(p.cardRadius))
+            .background(background)
+            .clearAndSetSemantics {},
+        contentAlignment = if (toEnd) Alignment.CenterStart else Alignment.CenterEnd,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(icon, contentDescription = null, tint = onBackground)
+            Text(
+                label,
+                color = onBackground,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
 
 @Composable
 private fun NoteCard(
