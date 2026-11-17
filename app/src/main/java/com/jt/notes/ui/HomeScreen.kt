@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,10 +65,12 @@ import com.jt.notes.Filter
 import com.jt.notes.MainActivity
 import com.jt.notes.NoteItem
 import com.jt.notes.NotesViewModel
+import com.jt.notes.R
 import com.jt.notes.Sort
 import com.jt.notes.data.LinkPreview
 import com.jt.notes.data.LinkPreviews
 import com.jt.notes.data.UpdateCheck
+import com.jt.notes.data.WhatsNew
 import com.jt.notes.data.parseItems
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -116,6 +119,8 @@ fun HomeScreen(
     var updateOffer by remember { mutableStateOf<UpdateCheck.Update?>(null) }
     var updateDownloading by remember { mutableStateOf(false) }
     var checkingUpdate by remember { mutableStateOf(false) }
+    // What's new: the version and notes to show once after an update, if any are due.
+    var whatsNew by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
     val updateScope = rememberCoroutineScope()
     val themeId by vm.theme.collectAsStateWithLifecycle()
     var exportPassword by remember { mutableStateOf<String?>(null) }
@@ -158,6 +163,7 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) { vm.refreshLastBackup() }
     LaunchedEffect(Unit) { checkForUpdates(manual = false) }
+    LaunchedEffect(Unit) { whatsNew = WhatsNew.pendingNotes(context) }
 
     // Undo stays on offer for a few seconds.
     val undoId = undo?.id
@@ -430,18 +436,13 @@ fun HomeScreen(
                             }
                         }
                     }
-                    Text(
-                        when (filter) {
-                            Filter.Archive -> "Archive"
-                            Filter.Trash -> "Trash"
-                            else -> "Notes"
-                        },
-                        fontFamily = Display,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 46.sp,
-                        lineHeight = 50.sp,
-                        letterSpacing = (-0.9).sp,
-                        modifier = Modifier.padding(start = 24.dp, end = 24.dp),
+                    Image(
+                        painter = painterResource(R.mipmap.ic_launcher),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .padding(start = 24.dp, top = 4.dp, bottom = 8.dp)
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp)),
                     )
                 }
 
@@ -822,6 +823,19 @@ fun HomeScreen(
                 updateOffer = null
             },
         )
+    }
+    // The update offer wins: the two dialogs never stack. The card waits until the offer is gone.
+    if (updateOffer == null) {
+        whatsNew?.let { (version, notes) ->
+            WhatsNewDialog(
+                version = version,
+                notes = notes,
+                onDismiss = {
+                    WhatsNew.markSeen(context)
+                    whatsNew = null
+                },
+            )
+        }
     }
 }
 

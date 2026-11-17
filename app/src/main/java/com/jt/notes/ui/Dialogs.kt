@@ -11,10 +11,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -24,11 +26,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.jt.notes.LabelTree
 import com.jt.notes.NotesViewModel
 import com.jt.notes.PlaceReminders
+import com.jt.notes.R
 import com.jt.notes.ReminderPlan
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -714,5 +718,37 @@ fun UpdateAvailableDialog(
         dismissButton = {
             TextButton(enabled = !downloading, onClick = onDismiss) { Text("Later") }
         },
+    )
+}
+
+/** Shown once after an update: the app icon, what changed in this version, and one button. */
+@Composable
+fun WhatsNewDialog(version: String, notes: List<String>, onDismiss: () -> Unit) {
+    val p = LocalPalette.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Image(
+                painter = painterResource(R.mipmap.ic_launcher),
+                contentDescription = null,
+                modifier = Modifier.size(64.dp).clip(RoundedCornerShape(16.dp)),
+            )
+        },
+        title = { Text("What's new in $version") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                notes.forEach { note ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("\u2022", color = p.accent, style = MaterialTheme.typography.bodyMedium)
+                        Text(note, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Got it") } },
+        shape = RoundedCornerShape(p.cardRadius),
+        containerColor = p.surface,
+        titleContentColor = p.ink,
+        textContentColor = p.ink,
     )
 }
